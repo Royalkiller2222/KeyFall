@@ -1,0 +1,60 @@
+═══════════════════════════════════════════════════════
+  PIANO HERO — How to Add Songs
+═══════════════════════════════════════════════════════
+
+OPTION A — Difficulty Folders (recommended)
+────────────────────────────────────────────
+Create a folder for each song inside this songs/ directory.
+Inside the folder, place MIDI files named by difficulty:
+
+  songs/
+    Moonlight Sonata/
+      easy.mid
+      medium.mid
+      hard.mid
+      info.txt        ← optional
+      cover.png       ← optional (future use)
+
+info.txt format (optional):
+  title: Moonlight Sonata
+  author: Ludwig van Beethoven
+
+The player can then select Easy / Medium / Hard from the song
+select screen.
+
+
+OPTION B — Single MIDI file (quick & easy)
+────────────────────────────────────────────
+Just drop any .mid or .midi file directly into songs/
+
+  songs/
+    my_song.mid
+
+It will appear as a single "MEDIUM" difficulty song.
+
+
+MENU MUSIC
+──────────────────────────────────────────────────────
+To use a MIDI file as menu background music:
+1. Place the MIDI file anywhere inside songs/ 
+   (can be inside a folder or flat)
+2. Go to Settings → Menu Music
+3. Select the file from the dropdown
+
+For Handel-Halvorsen Passacaglia:
+  • Download the MIDI from a source like:
+      https://www.mutopiaproject.org
+      https://www.classicalmidi.co.uk
+  • Place it in: songs/Passacaglia/menu.mid  (or any path)
+  • Select it in Settings
+
+
+MIDI FILE SOURCES
+──────────────────────────────────────────────────────
+  • MuseScore.com       — export any score as MIDI
+  • ClassicalMidi.co.uk — classical pieces
+  • MidiWorld.com       — large library
+  • BitMidi.com         — community uploads
+  • Your DAW            — export from GarageBand, FL Studio, etc.
+
+═══════════════════════════════════════════════════════

@@ -1,0 +1,16 @@
+# Build output (rebuilt by BUILD_EXE.bat)
+dist/
+build/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local state / logs
+savegame.json
+keyfall_crash.txt
+.packages_installed
+fluidsynth/.setup_done
+
+# Over GitHub's 100 MB file limit — downloaded by setup_audio.py
+fluidsynth/pianos/piano.sf2
