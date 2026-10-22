@@ -4,28 +4,24 @@ A Rocksmith-style 3D piano learning game with MIDI support.
 
 ---
 
-## 🚀 Quick Start (Running from Python)
+## 🚀 Quick Start
 
-### 1. Install Python 3.10+
-Download from https://python.org
+### Option A: Download the game (no Python needed)
+Get the latest `KeyFall-…-windows.zip` from the
+[Releases page](https://github.com/Royalkiller2222/KeyFall/releases), unzip it anywhere and
+run **KeyFall.exe**. Windows may show a SmartScreen warning because the EXE isn't signed:
+click **More info → Run anyway**.
 
-### 2. Install dependencies
-Open a terminal/command prompt in this folder and run:
-```
-pip install -r requirements.txt
-```
+### Option B: Run from source
+1. Install Python 3.12 from https://python.org
+2. Double-click **PLAY_KEYFALL.bat**. The first launch installs the packages from
+   `requirements.txt` and downloads the piano soundfont (about 35 MB, once).
 
-### 3. Add your songs
-Place `.mid` / `.midi` files into the `songs/` folder.
-A demo song is built-in if the folder is empty.
+Or by hand: `pip install -r requirements.txt`, `python setup_audio.py`, `python main.py`.
 
-### 4. Connect your MIDI piano
-Plug in your USB MIDI piano **before** launching.
-
-### 5. Run the game
-```
-python main.py
-```
+### Your MIDI piano
+Plug it in **before** launching. Velocity (how hard you play) and the sustain pedal are
+supported. If no piano is connected you can use the computer keyboard.
 
 ---
 
@@ -34,56 +30,98 @@ python main.py
 ### Menus
 | Key | Action |
 |-----|--------|
-| ↑ / ↓ | Navigate |
+| ↑ / ↓ or mouse | Navigate |
 | ENTER | Select |
 | ESC | Back |
-| M | Toggle Easy/Hard mode (Song Select) |
+| ← / → | Change difficulty (Song Select) |
+| M | Cycle mode Hard → Easy → Testing (Song Select) |
+| F11 | Fullscreen |
+
+Song Select also has practice speed buttons (100 / 75 / 50 / 25 %) and **Open Folder** /
+**Refresh** buttons for adding songs.
 
 ### In-Game
 | Key | Action |
 |-----|--------|
-| ESC | Pause/Resume |
-| F1 | Toggle Easy ↔ Hard mode |
-| F5 | Restart song |
+| ESC | Pause menu: Resume · Restart · Settings · Toggle Mode · Main Menu |
+| F5 | Restart (keeps the practice speed) |
 | F10 | End song & see results |
-| A S D F G H J K ... | Keyboard fallback (if no MIDI piano) |
+| A S D F G H J K L Q W E R T | Keyboard fallback for the song's lowest 14 notes |
+
+### Free Play
+| Key | Action |
+|-----|--------|
+| Z … M (and S D G H J) | C4 – B4 |
+| Q … P (and 2 3 5 6 7 9 0) | C5 – E6 |
+| ← / → | Octave down / up |
+| SPACE | Sustain pedal |
+| Mouse | Click or drag across keys |
 
 ---
 
 ## 🎯 Game Modes
 
-### EASY MODE 🟢
-Song pauses and waits until you play the correct note.
-Great for learning new songs.
+### HARD 🔴
+The song keeps going. Notes you don't play in time are misses, and so is pressing a key too
+early for its next note. Each miss costs 50 points and breaks your combo.
 
-### HARD MODE 🔴
-Song keeps playing. Wrong notes penalize your score.
-Combo breaks on any miss.
+### EASY 🟢 (wait mode)
+The song stops when a note or chord reaches the hit line and continues once you've played
+every note of it. Wrong keys are ignored, nothing counts as a miss, and notes played up to
+a second early are accepted. Great for learning new songs.
 
----
-
-## ⭐ Scoring System
-
-| Hit Quality | Score | XP |
-|-------------|-------|----|
-| PERFECT (±40ms) | 100 × multiplier | 10 |
-| GREAT (±80ms) | 70 × multiplier | 7 |
-| GOOD (±130ms) | 40 × multiplier | 3 |
-| MISS | 0 (Hard: -50) | 0 |
-
-**Combo Multiplier:** Every 10 hits increases multiplier (max 8×)
+### TESTING 🟠 (autoplay)
+The song plays itself so you can watch and listen. Autoplay runs earn no XP and no
+leaderboard entries. This is the default mode until you change it in Settings.
 
 ---
+
+## ⭐ Scoring
+
+| Hit Quality | Timing | Score | XP |
+|-------------|--------|-------|----|
+| PERFECT | within 40 ms | 100 × multiplier | 10 |
+| GREAT | within 80 ms | 70 × multiplier | 7 |
+| GOOD | within 200 ms (EASY waits: always GOOD) | 40 × multiplier | 3 |
+| MISS | — | Hard: −50 | 0 |
+
+**Combo Multiplier:** +1 every 10 notes in a row (max 8×).
+
+Personal bests are kept per song, difficulty, mode and speed.
 
 ## 🏆 Grades
-| Grade | Accuracy |
-|-------|----------|
-| S+ | 98%+ with 0 misses |
-| S | 95%+ |
-| A | 88%+ |
-| B | 75%+ |
-| C | 60%+ |
-| D | Below 60% |
+| Grade | Requirement |
+|-------|-------------|
+| GODLIKE | Every note PERFECT |
+| SS | Only PERFECT and GREAT, no misses |
+| S | No misses |
+| A | 90%+ accuracy |
+| B | 78%+ |
+| C | 62%+ |
+| F | Below 62% |
+
+---
+
+## 🔊 Sound
+
+Settings → **Note Sound Mode**:
+- **soundfont** (default): plays the `.sf2` chosen under *Soundfont Category / File*. Drop
+  extra soundfonts into `fluidsynth/<category>/`. The status line shows which one is loaded.
+- **synth**: built-in synthesized piano, no soundfont needed.
+- **midi_out**: sends notes to an external synth or digital piano (*MIDI Output Port*).
+  *MIDI Out Velocity* overrides the velocity sent (0 = as played).
+
+**Menu music:** put one MIDI file in `songs/_menu_music/`.
+**Custom sound effects:** replace the WAV files in `sfx/` (see `sfx/README.txt`).
+
+---
+
+## 🎵 Adding Songs
+
+See `songs/HOW_TO_ADD_SONGS.txt`. In short: drop `.mid` files into `songs/` (they are sorted
+into folders automatically), or make a folder per song with `easy.mid`, `medium.mid`,
+`hard.mid` and `extreme.mid`. Good sources: MuseScore.com, ClassicPianoMidi.com,
+midiworld.com, or export from any DAW.
 
 ---
 
@@ -109,27 +147,17 @@ workflow); the zip can be downloaded from that run for 7 days.
 
 ---
 
-## 🎵 Supported MIDI Files
-
-Any standard `.mid` file works. Great sources:
-- **Musescore.com** — free sheet music with MIDI export
-- **ClassicPianoMidi.com** — classical pieces
-- **midiworld.com** — huge library
-- Export from **GarageBand**, **FL Studio**, **Musescore**
-
----
-
 ## 🔧 Troubleshooting
 
 **MIDI piano not detected?**
-- Connect piano before launching
+- Connect the piano before launching (Free Play also retries every few seconds)
 - Install your piano's USB driver if required
-- Check Device Manager to confirm it's recognized as MIDI device
+- Check Device Manager to confirm it's recognized as a MIDI device
 
-**Low FPS?**
-- Close other applications
-- Reduce your display resolution in constants.py
+**No sound, or the wrong instrument?**
+Settings → Note Sound Mode = *soundfont*, then check the status line under it. If the
+selected soundfont is missing, KeyFall falls back to another installed one (pianos first).
 
-**No sound?**
-The game currently focuses on visual feedback.
-Audio playback (backing track) is planned for Phase 2!
+**The game closed unexpectedly?**
+Details are saved in `keyfall_crash.txt` next to the game. Please include it when
+reporting a bug.

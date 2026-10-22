@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════
-  PIANO HERO — How to Add Songs
+  KEYFALL — How to Add Songs
 ═══════════════════════════════════════════════════════
 
 OPTION A — Difficulty Folders (recommended)
@@ -10,17 +10,25 @@ Inside the folder, place MIDI files named by difficulty:
   songs/
     Moonlight Sonata/
       easy.mid
-      medium.mid
-      hard.mid
+      medium.mid      (normal.mid also works)
+      hard.mid        (expert.mid also works)
+      extreme.mid     (insane.mid also works)
       info.txt        ← optional
-      cover.png       ← optional (future use)
+      cover.png       ← optional, shown in Song Select (cover.jpg works too)
+
+Instead of named files you can also use difficulty subfolders, each holding
+one MIDI with any name:
+
+  songs/
+    Moonlight Sonata/
+      easy/anything.mid
+      hard/anything.mid
 
 info.txt format (optional):
   title: Moonlight Sonata
   author: Ludwig van Beethoven
 
-The player can then select Easy / Medium / Hard from the song
-select screen.
+The player can then select the difficulty with ← → in Song Select.
 
 
 OPTION B — Single MIDI file (quick & easy)
@@ -30,23 +38,22 @@ Just drop any .mid or .midi file directly into songs/
   songs/
     my_song.mid
 
-It will appear as a single "MEDIUM" difficulty song.
+On the next launch (or when you press REFRESH in Song Select) it is moved to
+songs/my_song/medium/my_song.mid and shows up as a MEDIUM song. Add easy/hard
+versions to that folder later if you like.
+
+
+ABOUT MIDI FILES
+──────────────────────────────────────────────────────
+  • All tracks are combined into one piano part. Drum tracks are skipped.
+  • The same key played by two tracks at the same moment counts once.
+  • Big files are parsed once and cached, so later launches are fast.
 
 
 MENU MUSIC
 ──────────────────────────────────────────────────────
-To use a MIDI file as menu background music:
-1. Place the MIDI file anywhere inside songs/ 
-   (can be inside a folder or flat)
-2. Go to Settings → Menu Music
-3. Select the file from the dropdown
-
-For Handel-Halvorsen Passacaglia:
-  • Download the MIDI from a source like:
-      https://www.mutopiaproject.org
-      https://www.classicalmidi.co.uk
-  • Place it in: songs/Passacaglia/menu.mid  (or any path)
-  • Select it in Settings
+Put one MIDI file into songs/_menu_music/ to use it as the main menu music.
+That folder does not appear in Song Select.
 
 
 MIDI FILE SOURCES
