@@ -16,6 +16,8 @@ DEFAULT_SAVE = {
 
 
 def load_save() -> dict:
+    if os.environ.get("KEYFALL_SELFTEST") == "1":
+        return copy.deepcopy(DEFAULT_SAVE)  # deterministic defaults for automated runs
     if os.path.exists(SAVE_FILE):
         try:
             with open(SAVE_FILE, "r", encoding="utf-8") as f:

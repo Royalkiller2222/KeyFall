@@ -1,0 +1,36 @@
+# Pushing a tag like v1.2.0 builds + self-tests the EXE (build.yml) and publishes it as a
+# GitHub Release. Tags with a hyphen (v1.2.0-beta.1) are marked as pre-releases.
+# Easiest way to push one: double-click RELEASE.bat.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ github.ref_name }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: KeyFall-windows
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" dist/KeyFall-*-windows.zip \
+            --repo "$GITHUB_REPOSITORY" --title "KeyFall $TAG" --generate-notes "${flags[@]}"

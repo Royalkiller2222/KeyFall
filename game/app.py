@@ -19,9 +19,10 @@ from game.freeplay import FreePlay
 from game.audio import AudioManager
 from game.save_system import load_save, save_game, add_leaderboard_entry
 from game.song_organizer import organize_flat_midis
+from game.version import VERSION
+from game import selftest
 
 STATE_PAUSE_MENU = "pause_menu"
-VERSION = "Alpha 1.0"
 STATE_FREEPLAY   = "freeplay"
 
 
@@ -166,6 +167,9 @@ class App:
         self._auto_load_menu_music()
         self.audio.start_menu_music()
 
+        self._selftest = (selftest.SelfTest(self, os.path.join(BASE_DIR, "keyfall_selftest.txt"))
+                          if selftest.ENABLED else None)
+
     def _W(self): return self.screen.get_width()
     def _H(self): return self.screen.get_height()
 
@@ -304,7 +308,10 @@ class App:
         running = True
         while running:
             dt = min(self.clock.tick(FPS)/1000.0, 0.02)  # tighter cap at 240fps
-            for event in pygame.event.get():
+            events = pygame.event.get()
+            if self._selftest:
+                events += self._selftest.events()
+            for event in events:
                 if event.type == pygame.QUIT: running = False
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                     self._toggle_fullscreen(); continue
@@ -344,7 +351,8 @@ class App:
 
         self.audio.shutdown()
         self.midi_input.disconnect()
-        pygame.quit(); sys.exit()
+        exit_code = 0 if self._selftest is None or self._selftest.passed else 1
+        pygame.quit(); sys.exit(exit_code)
 
     def _handle_event(self, event):
         if self.state == STATE_MENU:

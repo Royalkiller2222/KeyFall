@@ -14,7 +14,7 @@ from game.constants import *
 
 try:
     import mido
-    MIDO_AVAILABLE = True
+    MIDO_AVAILABLE = os.environ.get("KEYFALL_NO_MIDI") != "1"   # headless runs skip MIDI out
 except ImportError:
     MIDO_AVAILABLE = False
 

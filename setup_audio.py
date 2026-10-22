@@ -19,11 +19,6 @@ DONE    = os.path.join(FDIR, ".setup_done")
 YDP_URL  = "https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2"
 YDP_NAME = "YDP Grand Piano (Yamaha Disklavier)"
 
-# Fallback: UprightPianoKW SF2, 27MB 7z - skip if 7z not available
-# Fallback 2: FluidR3 zip
-FALLBACK_URL  = "https://keymusician01.s3.amazonaws.com/FluidR3_GM.zip"
-FALLBACK_NAME = "FluidR3 GM"
-
 
 def is_valid_sf2(path):
     try:
@@ -80,8 +75,6 @@ def setup():
 
     os.makedirs(os.path.join(FDIR, "pianos"), exist_ok=True)
     tmp_tar = os.path.join(FDIR, "_piano.tar.bz2")
-    tmp_zip = os.path.join(FDIR, "_piano.zip")
-    tmp_sf2 = os.path.join(FDIR, "_piano.sf2")
 
     # ── Try YDP Grand Piano (tar.bz2) ────────────────────────────
     sz = download(YDP_URL, tmp_tar, YDP_NAME)
@@ -114,30 +107,7 @@ def setup():
         print("  [OK] Audio setup complete!\n")
         return True
 
-    # ── Fallback: FluidR3 GM zip ──────────────────────────────────
-    print(f"\n  Trying fallback: {FALLBACK_NAME}...")
-    import zipfile
-    sz = download(FALLBACK_URL, tmp_zip, FALLBACK_NAME)
-    if sz > 100_000:
-        try:
-            with zipfile.ZipFile(tmp_zip, 'r') as z:
-                sf2s = [n for n in z.namelist() if n.lower().endswith('.sf2')]
-                if sf2s:
-                    with z.open(sf2s[0]) as zf, open(tmp_sf2, 'wb') as out:
-                        shutil.copyfileobj(zf, out)
-                    shutil.move(tmp_sf2, SF2)
-        except Exception as e:
-            print(f"  Fallback failed: {e}")
-        finally:
-            try: os.remove(tmp_zip)
-            except: pass
-
-    if is_valid_sf2(SF2):
-        open(DONE, 'w').write('ok\n')
-        print(f"\n  [OK] Fallback soundfont ready ({os.path.getsize(SF2)//1024}KB)")
-        return True
-
-    # ── All failed ────────────────────────────────────────────────
+    # ── Download failed ───────────────────────────────────────────
     print("\n  ─────────────────────────────────────────────────────")
     print("  Auto-download failed. Manual setup:")
     print()
@@ -160,4 +130,4 @@ def setup():
 
 
 if __name__ == "__main__":
-    setup()
+    sys.exit(0 if setup() else 1)

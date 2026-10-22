@@ -1,0 +1,83 @@
+# Builds the Windows EXE and runs the headless self-test (game/selftest.py).
+# Runs on pushes that touch the game, and is reused by release.yml for tagged releases.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "game/**"
+      - "main.py"
+      - "songs/**"
+      - "sfx/**"
+      - "fluidsynth/**"
+      - "build_release.py"
+      - "setup_audio.py"
+      - "requirements*.txt"
+      - ".github/workflows/**"
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version string shown in-game and used in the zip name
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows EXE + self-test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"   # piped output on Windows is cp1252 otherwise; setup_audio.py prints box art
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install build tools
+        run: python -m pip install -r requirements-build.txt
+
+      # piano.sf2 (118 MB) is too big for git; it is the FreePats YDP Grand Piano that
+      # setup_audio.py downloads. Cached so FreePats is only hit once.
+      - name: Restore piano soundfont
+        id: piano
+        uses: actions/cache@v6
+        with:
+          path: fluidsynth/pianos/piano.sf2
+          key: ydp-grand-piano-sf2-20160804
+
+      - name: Download piano soundfont
+        if: steps.piano.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            python setup_audio.py && break
+            echo "download attempt $attempt failed"; sleep 30
+          done
+          test -f fluidsynth/pianos/piano.sf2
+
+      - name: Build, zip and self-test
+        shell: bash
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          version="${VERSION_INPUT:-dev-${GITHUB_SHA::7}}"
+          python build_release.py --version "$version" --zip --selftest --no-install
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: KeyFall-windows
+          path: dist/KeyFall-*-windows.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

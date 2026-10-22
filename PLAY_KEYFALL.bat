@@ -8,15 +8,17 @@ echo  KeyFall
 echo.
 
 REM Find Python 3.12 or 3.11
-set PYEXE=
+REM (errorlevel is tested with "if errorlevel" because %errorlevel% inside a ( ) block
+REM  is read before the block runs, which made the 3.11 fallback unreachable)
+set "PYEXE="
 py -3.12 --version >nul 2>&1
-if %errorlevel% equ 0 set PYEXE=py -3.12
+if not errorlevel 1 set "PYEXE=py -3.12"
 
-if "%PYEXE%"=="" (
+if not defined PYEXE (
     py -3.11 --version >nul 2>&1
-    if %errorlevel% equ 0 set PYEXE=py -3.11
+    if not errorlevel 1 set "PYEXE=py -3.11"
 )
-if "%PYEXE%"=="" (
+if not defined PYEXE (
     echo  No Python found. Install Python 3.12 from python.org
     pause
     exit /b 1
@@ -31,10 +33,12 @@ if exist "venv\" rmdir /s /q venv
 REM Only install packages if the flag file is missing (first run or after reset)
 if not exist ".packages_installed" (
     echo  First run - installing packages...
-    %PYEXE% -m pip install --user --quiet "pygame==2.6.1" --only-binary=:all: --disable-pip-version-check
-    %PYEXE% -m pip install --user --quiet mido --disable-pip-version-check
-    %PYEXE% -m pip install --user --quiet numpy --only-binary=:all: --disable-pip-version-check
-    %PYEXE% -m pip install --user --quiet python-rtmidi --only-binary=:all: --disable-pip-version-check
+    %PYEXE% -m pip install --user --quiet -r requirements.txt --only-binary=:all: --disable-pip-version-check
+    if errorlevel 1 (
+        echo  Package install failed - check your internet connection and try again.
+        pause
+        exit /b 1
+    )
     echo installed > .packages_installed
     echo  Packages installed.
     echo.

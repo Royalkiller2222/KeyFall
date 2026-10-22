@@ -1,0 +1,11 @@
+* text=auto
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.yml  text eol=lf
+*.bat  text eol=crlf
+*.mid  binary
+*.midi binary
+*.sf2  binary
+*.SF2  binary
+*.wav  binary

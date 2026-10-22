@@ -89,12 +89,23 @@ Combo breaks on any miss.
 
 ## 📦 Build Windows EXE
 
-```
-pip install pyinstaller
-pyinstaller keyfall.spec
-```
+Double-click **BUILD_EXE.bat** (or run `python build_release.py`). It installs the pinned
+build tools, builds with PyInstaller and updates `dist/KeyFall/`. Your savegame and any songs
+you added there are kept. `python build_release.py --zip --selftest` also writes the release
+zip and runs the automated smoke test against the built EXE.
 
-The `.exe` will be in the `dist/` folder.
+## 🚀 Publishing a Release
+
+Double-click **RELEASE.bat** and enter a version (e.g. `1.1.0`). It pushes your commits and a
+`v1.1.0` tag. GitHub Actions then builds the EXE on a clean Windows machine, runs the
+self-test, and publishes `KeyFall-v1.1.0-windows.zip` on the
+[Releases page](https://github.com/Royalkiller2222/KeyFall/releases).
+Versions with a hyphen (`1.1.0-beta.1`) are published as pre-releases.
+
+Without the .bat: `git tag v1.1.0` then `git push origin v1.1.0`.
+
+Every push that changes the game also runs the same build + self-test (the **Build**
+workflow); the zip can be downloaded from that run for 7 days.
 
 ---
 

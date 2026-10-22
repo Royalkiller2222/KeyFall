@@ -13,8 +13,13 @@ try:
     import mido
     MIDO_AVAILABLE = True
 except ImportError:
+    mido = None
     MIDO_AVAILABLE = False
     print("[MIDI] mido not installed - MIDI input disabled")
+
+# Automated/headless runs (self-test, CI) must not grab the player's MIDI devices
+if os.environ.get("KEYFALL_NO_MIDI") == "1":
+    MIDO_AVAILABLE = False
 
 
 @dataclass
@@ -64,7 +69,7 @@ class MidiParser:
 
     @staticmethod
     def parse(filepath: str) -> Optional[SongData]:
-        if not MIDO_AVAILABLE:
+        if mido is None:
             print("[MIDI] Cannot parse: mido not installed")
             return None
         

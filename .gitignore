@@ -1,14 +1,17 @@
-# Build output (rebuilt by BUILD_EXE.bat)
+# Build output (BUILD_EXE.bat / build_release.py)
 dist/
 build/
+game/_build_info.py
 
 # Python caches
 __pycache__/
 *.pyc
 
 # Local state / logs
-savegame.json
+savegame.json*
 keyfall_crash.txt
+keyfall_selftest.txt
+cache/
 .packages_installed
 fluidsynth/.setup_done
 
