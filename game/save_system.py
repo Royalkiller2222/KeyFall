@@ -55,7 +55,7 @@ def save_game(data: dict):
 
 
 def add_leaderboard_entry(save_data: dict, song_title: str, stats):
-    """Add a result to the leaderboard for a song."""
+    """Add a result to the leaderboard for a song (the caller saves)."""
     lb = save_data.setdefault("leaderboard", {})
     entries = lb.setdefault(song_title, [])
 
@@ -71,4 +71,3 @@ def add_leaderboard_entry(save_data: dict, song_title: str, stats):
     # Keep top 10 only
     entries.sort(key=lambda e: e["score"], reverse=True)
     lb[song_title] = entries[:10]
-    save_game(save_data)

@@ -4,7 +4,7 @@ Fixes: cursor hidden in-game, pause menu with back-to-menu,
 hint text above keyboard, default testing mode, preview stops music.
 """
 
-import os, sys, math
+import os, sys, math, time
 import pygame
 from game.fonts import sys_font
 from typing import Optional, List
@@ -229,6 +229,7 @@ class App:
         self.audio.play_sfx("song_start")
         self.current_song = song
         self.current_mode = mode
+        self._current_speed = speed   # restarts keep the chosen practice speed
         self.engine   = GameplayEngine(song, mode)
         self.renderer = HighwayRenderer(self.screen)
         # Apply vanishing point AFTER renderer is created
@@ -253,12 +254,32 @@ class App:
         self.engine.start(time_offset=lookahead)  # current_time starts negative
         self.state = STATE_PLAYING
 
-    def _on_auto_note(self, pitch, velocity):
+    def _restart_song(self):
+        mode = self.engine.mode if self.engine else self.current_mode
+        self._start_song(self.current_song, mode, getattr(self, "_current_speed", 1.0))
+
+    def _on_auto_note(self, pitch, velocity, duration=0.5):
         self.audio.play_note(pitch, velocity)
         if self.renderer and self.engine and pitch in self.engine.lane_pitch_map:
             li = self.engine.lane_pitch_map.index(pitch)
             self.renderer.spawn_hit_particles(li, self.engine.num_lanes,
                                               LANE_COLORS[li%len(LANE_COLORS)], "PERFECT")
+
+    def _apply_result(self, result):
+        """Visual + SFX feedback for a judged key press."""
+        if result is None or not self.renderer or not self.engine:
+            return
+        lpm = self.engine.lane_pitch_map
+        if result.note.pitch not in lpm:
+            return
+        li = lpm.index(result.note.pitch)
+        if result.quality == "MISS":
+            self.renderer.spawn_miss_particles(li, self.engine.num_lanes)
+            self.audio.play_sfx("miss")
+        else:
+            self.renderer.spawn_hit_particles(li, self.engine.num_lanes,
+                                              LANE_COLORS[li % len(LANE_COLORS)], result.quality)
+            self.audio.play_sfx(result.quality.lower())
 
     def _on_midi_note(self, pitch, velocity, is_on):
         if self.state == STATE_FREEPLAY and self.free_play:
@@ -270,38 +291,34 @@ class App:
                 self.free_play._held.discard(pitch)
             return
         if self.state == STATE_PLAYING and self.engine and is_on:
-            result = self.engine.on_midi_note(pitch, velocity, is_on)
-            if result is None:
-                pass  # Nothing nearby — stay silent
-            elif result.quality != "MISS":
-                # Good hit — play the note sound
-                self.audio.play_note(pitch, velocity)
-                if self.renderer and result.note.pitch in self.engine.lane_pitch_map:
-                    li  = self.engine.lane_pitch_map.index(result.note.pitch)
-                    col = LANE_COLORS[li%len(LANE_COLORS)]
-                    self.renderer.spawn_hit_particles(li,self.engine.num_lanes,col,result.quality)
-                    self.audio.play_sfx(result.quality.lower())
-            else:
-                # Miss press — no note sound, play miss feedback
-                if self.renderer and result.note.pitch in self.engine.lane_pitch_map:
-                    li = self.engine.lane_pitch_map.index(result.note.pitch)
-                    self.renderer.spawn_miss_particles(li, self.engine.num_lanes)
-                self.audio.play_sfx("miss")
+            t_press = time.perf_counter()
+            self.audio.play_note(pitch, velocity)   # always hear what you play
+            self._apply_result(self.engine.on_midi_note(pitch, velocity, True, t_press))
 
-    def _get_personal_best(self, title):
-        entries = self.save_data.get("leaderboard",{}).get(title,[])
+    def _leaderboard_key(self):
+        """Personal bests compare like with like: same chart, mode and speed."""
+        song = self.current_song
+        return (f"{song.title} | {getattr(song, 'difficulty', '') or '-'} | "
+                f"{self.engine.mode} | {round(self.engine.playback_speed * 100)}%")
+
+    def _get_personal_best(self, key):
+        entries = self.save_data.get("leaderboard",{}).get(key,[])
         return max(entries, key=lambda e:e["score"]) if entries else None
 
     def _end_song(self):
         if not self.engine or not self.current_song: return
         stats = self.engine.stats
-        pb    = self._get_personal_best(self.current_song.title)
-        self.xp_system.add_xp(stats.xp_earned)
-        self.save_data["total_xp"] = self.xp_system.total_xp
-        add_leaderboard_entry(self.save_data, self.current_song.title, stats)
-        save_game(self.save_data)
+        autoplay = self.engine.used_autoplay
+        pb = None
+        if not autoplay:   # autoplay (TESTING) runs earn no XP and no leaderboard entry
+            key = self._leaderboard_key()
+            pb  = self._get_personal_best(key)
+            self.xp_system.add_xp(stats.xp_earned)
+            self.save_data["total_xp"] = self.xp_system.total_xp
+            add_leaderboard_entry(self.save_data, key, stats)
+            save_game(self.save_data)
         self.results_screen = ResultsScreen(
-            self.screen, stats, self.current_song.title, self.xp_system, pb)
+            self.screen, stats, self.current_song.title, self.xp_system, pb, autoplay=autoplay)
         self.state = STATE_RESULTS
         self.midi_input._callbacks.clear()
         self.audio.play_sfx("song_complete")
@@ -406,26 +423,13 @@ class App:
                     self.pause_menu = PauseMenu(self.screen, self.engine.mode)
                     self.state = STATE_PAUSE_MENU
                 elif event.key == pygame.K_F5:
-                    self._start_song(self.current_song, self.current_mode)
+                    self._restart_song()
                 elif event.key == pygame.K_F10:
                     self._end_song()
-                elif event.key in self._kb_pitch_map and self.engine.mode != MODE_TESTING:
+                elif event.key in self._kb_pitch_map:
                     pitch = self._kb_pitch_map[event.key]
-                    result = self.engine.on_midi_note(pitch, 80, True)
-                    if result is None:
-                        pass  # Nothing nearby — stay silent
-                    elif result.quality != "MISS":
-                        self.audio.play_note(pitch, 80)
-                        if self.renderer and result.note.pitch in self.engine.lane_pitch_map:
-                            li  = self.engine.lane_pitch_map.index(result.note.pitch)
-                            col = LANE_COLORS[li%len(LANE_COLORS)]
-                            self.renderer.spawn_hit_particles(li,self.engine.num_lanes,col,result.quality)
-                            self.audio.play_sfx(result.quality.lower())
-                    else:
-                        if self.renderer and result.note.pitch in self.engine.lane_pitch_map:
-                            li = self.engine.lane_pitch_map.index(result.note.pitch)
-                            self.renderer.spawn_miss_particles(li, self.engine.num_lanes)
-                        self.audio.play_sfx("miss")
+                    self.audio.play_note(pitch, 80)   # always hear what you play
+                    self._apply_result(self.engine.on_midi_note(pitch, 80, True))
 
         elif self.state == STATE_PAUSE_MENU:
             action = self.pause_menu.handle_event(event)
@@ -435,7 +439,7 @@ class App:
                 self.state = STATE_PLAYING
             elif action == "restart":
                 self.audio.play_sfx("confirm")
-                self._start_song(self.current_song, self.current_mode)
+                self._restart_song()
             elif action == "settings":
                 self.audio.play_sfx("confirm")
                 self.settings_screen = SettingsScreen(self.screen, self.audio, self.save_data, renderer=self.renderer)
@@ -459,7 +463,7 @@ class App:
                 self.audio.stop_sfx("song_complete")
             if action == "retry":
                 self.audio.play_sfx("confirm")
-                self._start_song(self.current_song, self.current_mode)
+                self._restart_song()
             elif action == "menu":
                 self.audio.play_sfx("back")
                 self._build_main_menu()
@@ -565,7 +569,7 @@ class App:
 
                 if getattr(self, '_countdown_active', False):
                     self._draw_countdown(W, H)
-                elif self.engine._easy_mode_paused:
+                elif self.engine.is_waiting:
                     self._overlay_easy_wait(W,H)
                 if self.engine.mode == MODE_TESTING:
                     self._overlay_testing(W,H)
@@ -635,21 +639,22 @@ class App:
         self.screen.blit(gs, (W//2 - gs.get_width()//2, y + txt.get_height() + 8))
 
     def _overlay_easy_wait(self, W, H):
-        wp = self.engine.get_waiting_pitch()
-        ov = pygame.Surface((W,H),pygame.SRCALPHA); ov.fill((0,0,0,110))
-        self.screen.blit(ov,(0,0))
+        if getattr(self, "_wait_ov", None) is None or self._wait_ov.get_size() != (W, H):
+            self._wait_ov = pygame.Surface((W,H),pygame.SRCALPHA); self._wait_ov.fill((0,0,0,110))
+        self.screen.blit(self._wait_ov,(0,0))
         names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
-        nm=(names[wp%12]+str(wp//12-1)) if wp else "?"
-        f=sys_font("consolas",46,bold=True)
-        s=f.render(f"Play:  {nm}",True,NEON_GREEN)
+        chord = "  ".join(names[p%12]+str(p//12-1) for p in self.engine.get_waiting_pitches()) or "?"
+        s=sys_font("consolas",46,bold=True).render(f"Play:  {chord}",True,NEON_GREEN)
+        if s.get_width() > W*0.9:   # big chords: smaller text so it fits
+            s=sys_font("consolas",28,bold=True).render(f"Play:  {chord}",True,NEON_GREEN)
         self.screen.blit(s,(W//2-s.get_width()//2,H//2-28))
         h=sys_font("consolas",19).render(
-            "EASY MODE — Play the highlighted note to continue",True,NEON_YELLOW)
+            "EASY MODE — play the waiting notes to continue",True,NEON_YELLOW)
         self.screen.blit(h,(W//2-h.get_width()//2,H//2+28))
 
     def _overlay_testing(self, W, H):
         f=sys_font("consolas",17,bold=True)
-        s=f.render("◆ TESTING MODE — Notes play automatically ◆",True,NEON_ORANGE)
+        s=f.render("◆ TESTING MODE — Notes play automatically (not scored) ◆",True,NEON_ORANGE)
         bg=pygame.Surface((s.get_width()+22,s.get_height()+8),pygame.SRCALPHA)
         bg.fill((20,10,0,170))
         self.screen.blit(bg,(W//2-bg.get_width()//2,88))

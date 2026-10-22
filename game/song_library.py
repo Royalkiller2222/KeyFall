@@ -49,6 +49,10 @@ class SongEntry:
     has_cover: bool = False
     author: str = ""
 
+    def __post_init__(self):
+        for diff, song in self.difficulties.items():
+            song.difficulty = diff   # lets results/leaderboards tell charts apart
+
     @property
     def available_difficulties(self) -> List[str]:
         return [d for d in DIFFICULTY_ORDER if d in self.difficulties]

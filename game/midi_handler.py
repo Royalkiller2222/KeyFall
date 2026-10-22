@@ -54,6 +54,7 @@ class SongData:
     time_signature: tuple = (4, 4)
     min_pitch: int = 60
     max_pitch: int = 72
+    difficulty: str = ""     # EASY / MEDIUM / HARD / EXTREME, set by the song library
 
     def get_notes_in_window(self, start_sec: float, end_sec: float) -> List[MidiNote]:
         return [n for n in self.notes if start_sec <= n.time_sec <= end_sec]

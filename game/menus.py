@@ -586,10 +586,12 @@ class SongSelectMenu(MenuBase):
 
 # ── Results Screen ────────────────────────────────────────────────
 class ResultsScreen(MenuBase):
-    def __init__(self, screen, stats, song_title:str, xp_system, personal_best:Optional[dict]):
+    def __init__(self, screen, stats, song_title:str, xp_system, personal_best:Optional[dict],
+                 autoplay: bool = False):
         super().__init__(screen)
         self.stats=stats; self.song_title=song_title
         self.xp_system=xp_system; self.pb=personal_best
+        self.autoplay=autoplay   # TESTING-mode run: shown, but not saved
         self.grade=stats.get_grade(); self._show_timer=0.0; self.selected=0
         self._btns=["RETRY","MAIN MENU"]
 
@@ -677,7 +679,10 @@ class ResultsScreen(MenuBase):
             self.screen.blit(self.fn_small.render(str(count),True,WHITE),(bx+8,cy2+18))
             pct=self.fn_tiny.render(f"{frac*100:.0f}%",True,GRAY)
             self.screen.blit(pct,(bx+bw2-pct.get_width()-8,cy2+12)); cy2+=52
-        if self.pb:
+        if self.autoplay:
+            self.screen.blit(self.fn_small.render(
+                "AUTOPLAY RUN (Testing mode) — score and XP were not saved",True,NEON_ORANGE),(20,510))
+        elif self.pb:
             pb_y=510
             self.screen.blit(self.fn_small.render("PERSONAL BEST  (before this run)",True,GRAY),(20,pb_y))
             pb_row=(f"Score: {self.pb.get('score',0):,}   Acc: {self.pb.get('accuracy',0):.1f}%"
