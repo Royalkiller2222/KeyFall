@@ -71,6 +71,8 @@ class SelfTest:
             (0.5, "toggle mode",                self._toggle_mode,                   lambda: a.engine.mode != self._mode_before),
             (0.5, "resume",                     lambda: _keys(K.K_ESCAPE),           at(STATE_PLAYING)),
             (2.0, "play keys while judged",     lambda: _keys(K.K_a, K.K_s, K.K_d, K.K_f, K.K_g), at(STATE_PLAYING)),
+            (0.3, "MIDI key down (judged)",     lambda: self._midi("note_on", 100),  self._midi_key_down),
+            (0.3, "MIDI key up + sustain pedal",self._midi_release,                  self._midi_key_up),
             (1.5, "end song -> results",        lambda: _keys(K.K_F10),              at(STATE_RESULTS)),
             (0.5, "results -> main menu",       lambda: _keys(K.K_ESCAPE),           at(STATE_MENU)),
             (1.0, "song select again",          lambda: _keys(K.K_RETURN),           at(STATE_SONG_SELECT)),
@@ -80,6 +82,10 @@ class SelfTest:
             (0.5, "back to main menu",          lambda: _keys(K.K_ESCAPE),           at(STATE_MENU)),
             (1.0, "open free play",             lambda: _keys(K.K_DOWN, K.K_RETURN), at(STATE_FREEPLAY)),
             (1.5, "free play keys + sustain",   self._free_play_input,               at(STATE_FREEPLAY)),
+            (0.3, "free play MIDI key",         lambda: self._midi("note_on", 90),
+                                                lambda: self._midi_pitch in a.free_play._held),
+            (0.3, "free play MIDI release",     lambda: self._midi("note_off", 0),
+                                                lambda: self._midi_pitch not in a.free_play._held),
             (0.5, "free play -> main menu",     lambda: _keys(K.K_ESCAPE),           at(STATE_MENU)),
             (0.5, "settings from main menu",    lambda: _keys(K.K_DOWN, K.K_DOWN, K.K_RETURN), at(STATE_SETTINGS)),
             (0.5, "mouse wheel in settings",    _wheel,                              at(STATE_SETTINGS)),
@@ -118,6 +124,28 @@ class SelfTest:
                              f"t={a.engine.current_time:.1f}s, {a.clock.get_fps():.0f} FPS, "
                              f"{a.engine.stats.hit_count} hits")
         return ok
+
+    def _midi(self, kind, velocity):
+        """Feed a message through the same entry point the MIDI backend calls."""
+        import mido
+        engine = self.app.engine
+        self._midi_pitch = engine.lane_pitch_map[0] if engine and self.app.state != "freeplay" else 60
+        self.app.midi_input._on_message(mido.Message(kind, note=self._midi_pitch, velocity=velocity))
+        return []
+
+    def _midi_release(self):
+        import mido
+        self._midi("note_off", 0)
+        for value in (127, 0):   # sustain pedal down, up
+            self.app.midi_input._on_message(mido.Message("control_change", control=64, value=value))
+        return []
+
+    def _midi_key_down(self):
+        return self._midi_pitch in self.app.midi_input._pressed_keys
+
+    def _midi_key_up(self):
+        return (self._midi_pitch not in self.app.midi_input._pressed_keys
+                and not self.app.audio.sustain)
 
     def _toggle_mode(self):
         self._mode_before = self.app.engine.mode

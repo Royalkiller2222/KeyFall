@@ -144,6 +144,7 @@ class App:
         self.audio.apply_settings(self.save_data.get("settings", {}))
 
         self.midi_input = MidiInputHandler()
+        self.midi_input.on_live = self._on_live_midi
         self.midi_input.connect()
 
         organize_flat_midis()  # auto-organize any flat .mid files
@@ -158,6 +159,7 @@ class App:
         self.current_song: Optional[SongData] = None
         self.pause_menu: Optional[PauseMenu] = None
         self._kb_pitch_map = {}
+        self._kb_down = set()   # QWERTY keys held in-game (highlighted on the keyboard)
 
         self._build_main_menu()
         self.audio.start_menu_music()
@@ -216,13 +218,12 @@ class App:
         self.renderer._vanish_frac = vf
         self.audio.all_notes_off(120)   # cut song-preview / previous-run notes
         self.engine.on_auto_note = self._on_auto_note
-        self.midi_input._callbacks.clear()
-        self.midi_input.add_callback(self._on_midi_note)
         keys = [pygame.K_a,pygame.K_s,pygame.K_d,pygame.K_f,pygame.K_g,
                 pygame.K_h,pygame.K_j,pygame.K_k,pygame.K_l,
                 pygame.K_q,pygame.K_w,pygame.K_e,pygame.K_r,pygame.K_t]
         self._kb_pitch_map = {keys[i]:p for i,p in
                               enumerate(self.engine.lane_pitch_map[:len(keys)])}
+        self._kb_down = set()
         self.audio.stop_menu_music(300)
         self.engine.playback_speed = speed
         # Start engine immediately with a negative time offset equal to lookahead
@@ -260,20 +261,29 @@ class App:
                                               LANE_COLORS[li % len(LANE_COLORS)], result.quality)
             self.audio.play_sfx(result.quality.lower())
 
-    def _on_midi_note(self, pitch, velocity, is_on):
-        if self.state == STATE_FREEPLAY and self.free_play:
-            if is_on and velocity > 0:
-                self.free_play.press(pitch, velocity, flash=0.5)
-            else:
-                self.free_play.release(pitch)
+    def _on_live_midi(self, kind, a, b):
+        """MIDI thread: sound right away, without waiting for the next frame."""
+        if self.state not in (STATE_PLAYING, STATE_FREEPLAY):
             return
-        if self.state == STATE_PLAYING and self.engine:
-            if not (is_on and velocity > 0):
-                self.audio.note_off(pitch)
-                return
-            t_press = time.perf_counter()
-            self.audio.note_on(pitch, velocity)   # always hear what you play
-            self._apply_result(self.engine.on_midi_note(pitch, velocity, True, t_press))
+        if kind == "on":
+            self.audio.note_on(a, b)        # always hear what you play
+        elif kind == "off":
+            self.audio.note_off(a)
+        elif kind == "sustain":
+            self.audio.set_sustain(a)
+
+    def _on_midi_event(self, t, kind, a, b):
+        """Main thread: the game's reaction to a MIDI event (its sound already played).
+        Presses are judged by `t`, the moment the MIDI message arrived."""
+        if self.state == STATE_FREEPLAY and self.free_play:
+            if kind == "on":
+                self.free_play.press(a, b, flash=0.5, sound=False)
+            elif kind == "off":
+                self.free_play.release(a, sound=False)
+            elif kind == "sustain":
+                self.free_play.set_sustain(a, sound=False)
+        elif self.state == STATE_PLAYING and self.engine and kind == "on":
+            self._apply_result(self.engine.on_midi_note(a, b, True, t))
 
     def _leaderboard_key(self):
         """Personal bests compare like with like: same chart, mode and speed."""
@@ -300,7 +310,7 @@ class App:
         self.results_screen = ResultsScreen(
             self.screen, stats, self.current_song.title, self.xp_system, pb, autoplay=autoplay)
         self.state = STATE_RESULTS
-        self.midi_input._callbacks.clear()
+        self.audio.all_notes_off(400)
         self.audio.play_sfx("song_complete")
 
     def run(self):
@@ -322,6 +332,8 @@ class App:
                         self.renderer.screen=self.screen
                         self.renderer.on_resize(event.w,event.h)
                 if self._handle_event(event) == "quit": running = False
+            for midi_event in self.midi_input.poll():
+                self._on_midi_event(*midi_event)
             self._update(dt)
             self.audio.update()
             self._draw(dt)
@@ -371,9 +383,6 @@ class App:
                 self.audio.play_sfx("confirm")
                 self.audio.stop_menu_music(500)
                 self.free_play = FreePlay(self.screen, self.audio)
-                # Ensure MIDI callback is registered for freeplay
-                self.midi_input._callbacks.clear()
-                self.midi_input.add_callback(self._on_midi_note)
                 self.state = STATE_FREEPLAY
             elif action == "settings":
                 self.audio.play_sfx("confirm")
@@ -410,10 +419,13 @@ class App:
                     self._end_song()
                 elif event.key in self._kb_pitch_map:
                     pitch = self._kb_pitch_map[event.key]
+                    self._kb_down.add(pitch)
                     self.audio.note_on(pitch, 80)   # always hear what you play
                     self._apply_result(self.engine.on_midi_note(pitch, 80, True))
             elif event.type == pygame.KEYUP and event.key in self._kb_pitch_map:
-                self.audio.note_off(self._kb_pitch_map[event.key])
+                pitch = self._kb_pitch_map[event.key]
+                self._kb_down.discard(pitch)
+                self.audio.note_off(pitch)
 
         elif self.state == STATE_PAUSE_MENU:
             action = self.pause_menu.handle_event(event)
@@ -436,7 +448,6 @@ class App:
             elif action == "menu":
                 self.audio.play_sfx("back")
                 self.audio.all_notes_off()
-                self.midi_input._callbacks.clear()
                 self.engine = None; self.renderer = None
                 self._build_main_menu()
                 self.state = STATE_MENU
@@ -462,7 +473,6 @@ class App:
                     self.audio.play_sfx("back")
                     self.audio.all_notes_off()
                     self.free_play = None
-                    self.midi_input._callbacks.clear()
                     self._build_main_menu()
                     self.state = STATE_MENU
                     self.audio.start_menu_music()
@@ -542,7 +552,7 @@ class App:
                 self.renderer.draw(
                     self.current_song, self.engine.current_time,
                     self.engine.num_lanes, self.engine.lane_pitch_map, dt,
-                    pressed_keys=self.midi_input._pressed_keys)
+                    pressed_keys=self.midi_input._pressed_keys | self._kb_down)
                 stats = self.engine.stats
                 self.renderer.draw_hud(
                     score=stats.score, combo=stats.combo,
