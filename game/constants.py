@@ -98,5 +98,7 @@ import os as _os, sys as _sys
 _BASE = (_os.path.dirname(_sys.executable)
          if getattr(_sys, "frozen", False)
          else _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+BASE_DIR  = _BASE   # folder holding the EXE (or main.py) and the player-editable data
 SONGS_DIR = _os.path.join(_BASE, "songs")
+SFX_DIR   = _os.path.join(_BASE, "sfx")
 SAVE_FILE  = _os.path.join(_BASE, "savegame.json")

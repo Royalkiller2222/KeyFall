@@ -285,7 +285,6 @@ class SettingsScreen:
         self._all=[*self.sliders,self.sfx_tog,self.mode_sel,self.sf2_cat_sel,self.sf2_file_sel,
                    self.port_sel,self.gm_sel,self.vp_sel,self.vel_sl,self.btn_test,
                    self.btn_save,self.btn_back]
-        self.music_sel=None
 
     def handle_event(self,event)->Optional[str]:
         if self.screen.get_width()!=self._W or self.screen.get_height()!=self._H:
@@ -314,13 +313,11 @@ class SettingsScreen:
             for sl in self.sliders: sl.on_mouse_up()
             self.vel_sl.on_mouse_up()
         elif event.type==pygame.MOUSEWHEEL:
-            # Route scroll to whichever dropdown is currently open
+            # Route scroll to whichever dropdown is currently open (ignore it otherwise)
             for box in (self.sf2_cat_sel, self.sf2_file_sel, self.mode_sel, self.port_sel, self.gm_sel, self.vp_sel):
                 if getattr(box, "_open", False):
                     box.on_mouse_scroll(event.y)
                     break
-            else:
-                self.music_sel.on_mouse_scroll(event.y)
         elif event.type==pygame.KEYDOWN:
             if event.key==pygame.K_ESCAPE:
                 self.audio.play_sfx("back"); return "back"

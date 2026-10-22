@@ -3,86 +3,60 @@ import sys as _sys, os as _os
 _base = (_os.path.dirname(_sys.executable) if getattr(_sys,"frozen",False)
          else _os.path.dirname(_os.path.abspath(__file__)))
 _os.chdir(_base)  # Set working directory to game folder
-_cf = open(_os.path.join(_base, "keyfall_crash.txt"), "w")
-_cf.write("main.py line 1 - Python is alive\n")
-_cf.flush()
+_cf = open(_os.path.join(_base, "keyfall_crash.txt"), "w", encoding="utf-8")
 
-_cf.write("importing sys\n"); _cf.flush()
-import sys
 
-_cf.write("importing os\n"); _cf.flush()
-import os
+def _log(msg):
+    _cf.write(msg + "\n"); _cf.flush()
 
-_cf.write("importing traceback\n"); _cf.flush()
-import traceback
 
-_cf.write("importing pygame\n"); _cf.flush()
-import pygame
-_cf.write(f"pygame OK: {pygame.__version__}\n"); _cf.flush()
+def _report_crash(tb):
+    """Save the traceback, then tell the player - the windowed EXE has no console."""
+    try:
+        _log(f"\nCRASH:\n{tb}")
+    except Exception:
+        pass
+    if _os.environ.get("KEYFALL_SELFTEST") == "1":
+        return  # automated run: a dialog would block forever
+    if getattr(_sys, "frozen", False) or _sys.stdin is None:
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                None, f"KeyFall crashed. Details were saved to:\n{_cf.name}\n\n{tb[-1500:]}",
+                "KeyFall", 0x10)
+        except Exception:
+            pass
+    else:
+        print(tb)
+        try:
+            input("Press Enter to close...")
+        except Exception:
+            pass
 
-_cf.write("importing mido\n"); _cf.flush()
-import mido
-_cf.write("mido OK\n"); _cf.flush()
-
-_cf.write("importing numpy\n"); _cf.flush()
-import numpy
-_cf.write("numpy OK\n"); _cf.flush()
-
-_cf.write("importing game.constants\n"); _cf.flush()
-from game.constants import *
-_cf.write("constants OK\n"); _cf.flush()
-
-_cf.write("importing game.midi_handler\n"); _cf.flush()
-from game.midi_handler import MidiParser, MidiInputHandler, SongData, create_demo_song
-_cf.write("midi_handler OK\n"); _cf.flush()
-
-_cf.write("importing game.song_library\n"); _cf.flush()
-from game.song_library import scan_songs_library, SongEntry
-_cf.write("song_library OK\n"); _cf.flush()
-
-_cf.write("importing game.save_system\n"); _cf.flush()
-from game.save_system import load_save, save_game, add_leaderboard_entry
-_cf.write("save_system OK\n"); _cf.flush()
-
-_cf.write("importing game.gameplay\n"); _cf.flush()
-from game.gameplay import GameplayEngine, XPSystem
-_cf.write("gameplay OK\n"); _cf.flush()
-
-_cf.write("importing game.fluidsynth_engine\n"); _cf.flush()
-from game import fluidsynth_engine
-_cf.write("fluidsynth_engine OK\n"); _cf.flush()
-
-_cf.write("importing game.audio\n"); _cf.flush()
-from game.audio import AudioManager
-_cf.write("audio OK\n"); _cf.flush()
-
-_cf.write("importing game.renderer\n"); _cf.flush()
-from game.renderer import HighwayRenderer
-_cf.write("renderer OK\n"); _cf.flush()
-
-_cf.write("importing game.menus\n"); _cf.flush()
-from game.menus import MainMenu, SongSelectMenu, ResultsScreen
-_cf.write("menus OK\n"); _cf.flush()
-
-_cf.write("importing game.settings_screen\n"); _cf.flush()
-from game.settings_screen import SettingsScreen
-_cf.write("settings_screen OK\n"); _cf.flush()
-
-_cf.write("importing game.app\n"); _cf.flush()
-from game.app import App
-_cf.write("app OK\n"); _cf.flush()
-
-_cf.write("ALL IMPORTS DONE - creating App\n"); _cf.flush()
 
 try:
+    _log("main.py line 1 - Python is alive")
+    import importlib, traceback
+    for _name in ("pygame", "mido", "numpy", "game.constants", "game.midi_handler",
+                  "game.song_library", "game.save_system", "game.gameplay",
+                  "game.fluidsynth_engine", "game.audio", "game.renderer", "game.menus",
+                  "game.settings_screen", "game.app"):
+        _log(f"importing {_name}")
+        _mod = importlib.import_module(_name)
+        _log(f"{_name} OK" + (f": {_mod.__version__}" if _name == "pygame" else ""))
+    from game.app import App
+    _log("ALL IMPORTS DONE - creating App")
     app = App()
-    _cf.write("App created - running\n"); _cf.flush()
-    _cf.close()
+    _log("App created - running")
     app.run()
-except Exception as e:
-    tb = traceback.format_exc()
-    _cf.write(f"\nCRASH IN APP:\n{tb}\n")
-    _cf.flush(); _cf.close()
-    print(tb)
-    input("Press Enter to close...")
-    sys.exit(1)
+except SystemExit:
+    raise
+except Exception:
+    import traceback
+    _report_crash(traceback.format_exc())
+    _sys.exit(1)
+finally:
+    try:
+        _cf.close()
+    except Exception:
+        pass

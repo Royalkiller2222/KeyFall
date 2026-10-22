@@ -286,7 +286,7 @@ class AudioManager:
         # Generate menu music in background
         # Check _menu_music folder before starting synth generation
         # If a MIDI is found there, it will be loaded instead
-        _mm_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "songs", "_menu_music")
+        _mm_dir = os.path.join(SONGS_DIR, "_menu_music")
         _found_midi = False
         if os.path.isdir(_mm_dir):
             for _f in sorted(os.listdir(_mm_dir)):
@@ -338,9 +338,8 @@ class AudioManager:
 
     def _load_sfx_file(self, name: str) -> Optional[pygame.mixer.Sound]:
         """Try to load a WAV from the sfx/ folder. Returns None if not found."""
-        sfx_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sfx")
         for ext in [".wav", ".WAV", ".ogg", ".mp3"]:
-            path = os.path.join(sfx_dir, name + ext)
+            path = os.path.join(SFX_DIR, name + ext)
             if os.path.exists(path):
                 try:
                     snd = pygame.mixer.Sound(path)

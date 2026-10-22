@@ -3,6 +3,7 @@ KeyFall - Save System
 Persists player XP, level, and song leaderboards
 """
 
+import copy
 import json
 import os
 from game.constants import SAVE_FILE
@@ -17,22 +18,36 @@ DEFAULT_SAVE = {
 def load_save() -> dict:
     if os.path.exists(SAVE_FILE):
         try:
-            with open(SAVE_FILE, "r") as f:
+            with open(SAVE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("save file does not contain an object")
             # Merge with defaults
             for key, val in DEFAULT_SAVE.items():
-                if key not in data:
-                    data[key] = val
+                data.setdefault(key, copy.deepcopy(val))
             return data
         except Exception as e:
-            print(f"[Save] Load failed: {e}, using defaults")
-    return dict(DEFAULT_SAVE)
+            # Keep the unreadable file so progress can be recovered by hand,
+            # instead of overwriting it with defaults on the next save.
+            backup = SAVE_FILE + ".corrupt"
+            try:
+                os.replace(SAVE_FILE, backup)
+            except OSError:
+                pass
+            print(f"[Save] Load failed: {e}, using defaults (old file kept as {backup})")
+    return copy.deepcopy(DEFAULT_SAVE)
 
 
 def save_game(data: dict):
+    if os.environ.get("KEYFALL_SELFTEST") == "1":
+        return  # automated smoke tests never touch the player's save
+    tmp = SAVE_FILE + ".tmp"
     try:
-        with open(SAVE_FILE, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SAVE_FILE)  # atomic: a crash mid-write can't corrupt the save
     except Exception as e:
         print(f"[Save] Save failed: {e}")
 
