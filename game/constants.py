@@ -6,7 +6,7 @@ KeyFall - Constants & Configuration
 WINDOW_TITLE = "KEYFALL"
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
-FPS = 240
+FPS = 120   # frame cap; leaves CPU for the audio and MIDI threads
 
 # Colors (Neon Rocksmith palette)
 BLACK       = (0, 0, 0)

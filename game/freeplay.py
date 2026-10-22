@@ -6,6 +6,7 @@ Shows key name labels, octave markers, sustain simulation.
 
 import math
 import pygame
+from game.fonts import sys_font
 from game.constants import *
 
 NOTE_NAMES  = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
@@ -65,11 +66,11 @@ class FreePlay:
 
     def _init_fonts(self):
         s = self.H / 720
-        self.fn_title  = pygame.font.SysFont("consolas", max(18, int(36*s)), bold=True)
-        self.fn_note   = pygame.font.SysFont("consolas", max(10, int(18*s)), bold=True)
-        self.fn_small  = pygame.font.SysFont("consolas", max(9,  int(14*s)))
-        self.fn_label  = pygame.font.SysFont("consolas", max(8,  int(12*s)))
-        self.fn_hint   = pygame.font.SysFont("consolas", max(9,  int(13*s)))
+        self.fn_title  = sys_font("consolas", max(18, int(36*s)), bold=True)
+        self.fn_note   = sys_font("consolas", max(10, int(18*s)), bold=True)
+        self.fn_small  = sys_font("consolas", max(9,  int(14*s)))
+        self.fn_label  = sys_font("consolas", max(8,  int(12*s)))
+        self.fn_hint   = sys_font("consolas", max(9,  int(13*s)))
 
     def _build_key_rects(self):
         """Build pixel rects for all 88 keys."""
@@ -303,9 +304,12 @@ class FreePlay:
                 border = (60, 60, 80)
             pygame.draw.rect(self.screen, fill, rect, border_radius=3)
             if not pressed:
-                # Subtle shadow at top
-                sh = pygame.Surface((rect.w, 10), pygame.SRCALPHA)
-                sh.fill((0,0,0,40))
+                # Subtle shadow at top (one cached surface per key width)
+                shadows = self.__dict__.setdefault("_shadows", {})
+                sh = shadows.get(rect.w)
+                if sh is None:
+                    sh = shadows[rect.w] = pygame.Surface((rect.w, 10), pygame.SRCALPHA)
+                    sh.fill((0,0,0,40))
                 self.screen.blit(sh, (rect.x, rect.y))
             pygame.draw.rect(self.screen, border, rect, 1, border_radius=3)
             # C labels
@@ -350,7 +354,7 @@ class FreePlay:
 
     def _is_kb_mapped(self, pitch):
         """Check if this pitch (at current octave shift) is mapped to a key."""
-        for key, base in self.KB_MAP.items():
-            if base + self._octave_shift * 12 == pitch:
-                return True
-        return False
+        if getattr(self, "_mapped_shift", None) != self._octave_shift:
+            self._mapped = {base + self._octave_shift * 12 for base in self.KB_MAP.values()}
+            self._mapped_shift = self._octave_shift
+        return pitch in self._mapped

@@ -6,6 +6,7 @@ hint text above keyboard, default testing mode, preview stops music.
 
 import os, sys, math
 import pygame
+from game.fonts import sys_font
 from typing import Optional, List
 
 from game.constants import *
@@ -35,9 +36,9 @@ class PauseMenu:
         self.screen = screen
         self.mode = current_mode
         self.selected = 0
-        self.fn_title = pygame.font.SysFont("consolas", 52, bold=True)
-        self.fn_opt   = pygame.font.SysFont("consolas", 30, bold=True)
-        self.fn_hint  = pygame.font.SysFont("consolas", 15)
+        self.fn_title = sys_font("consolas", 52, bold=True)
+        self.fn_opt   = sys_font("consolas", 30, bold=True)
+        self.fn_hint  = sys_font("consolas", 15)
 
     def _btn_rect(self, i):
         W, H = self.screen.get_size()
@@ -68,10 +69,11 @@ class PauseMenu:
     def draw(self):
         W, H = self.screen.get_size()
         import math
-        # Dim overlay
-        ov = pygame.Surface((W, H), pygame.SRCALPHA)
-        ov.fill((0,0,0,165))
-        self.screen.blit(ov, (0,0))
+        # Dim overlay (built once per window size, not every frame)
+        if getattr(self, "_ov", None) is None or self._ov.get_size() != (W, H):
+            self._ov = pygame.Surface((W, H), pygame.SRCALPHA)
+            self._ov.fill((0,0,0,165))
+        self.screen.blit(self._ov, (0,0))
 
         # Title — moved up
         title = self.fn_title.render("PAUSED", True, NEON_CYAN)
@@ -328,7 +330,7 @@ class App:
             # Version + FPS — position depends on state
             fps = self.clock.get_fps()
             if not hasattr(self, '_fps_font'):
-                self._fps_font = pygame.font.SysFont("consolas", 13)
+                self._fps_font = sys_font("consolas", 13)
             W2 = self.screen.get_width()
             H2 = self.screen.get_height()
             if self.state == STATE_FREEPLAY:
@@ -570,7 +572,7 @@ class App:
 
                 # Hint bar — sits between HUD and keyboard, clear of both
                 hbar_y = self.renderer.PIANO_Y - self.renderer.PIANO_H - 22
-                hint = pygame.font.SysFont("consolas",12).render(
+                hint = sys_font("consolas",12).render(
                     "ESC: Pause Menu  ·  F5: Restart  ·  F10: End Song  ·  F11: Fullscreen",
                     True, (38,38,58))
                 self.screen.blit(hint,(W//2-hint.get_width()//2, hbar_y))
@@ -620,7 +622,7 @@ class App:
         frac = (self._countdown % thirds) / thirds
         scale = 1.0 + 0.35 * frac
         size = int(100 * scale)
-        f = pygame.font.SysFont("consolas", max(40, size), bold=True)
+        f = sys_font("consolas", max(40, size), bold=True)
         col = [(255,80,80),(255,200,0),(0,220,100)][n-1]
         txt = f.render(str(n), True, col)
         sh  = f.render(str(n), True, (0,0,0))
@@ -628,7 +630,7 @@ class App:
         y = int(H*0.38) - txt.get_height()//2
         self.screen.blit(sh, (x+3, y+3))
         self.screen.blit(txt, (x, y))
-        gf = pygame.font.SysFont("consolas", 22, bold=True)
+        gf = sys_font("consolas", 22, bold=True)
         gs = gf.render("GET READY", True, GRAY)
         self.screen.blit(gs, (W//2 - gs.get_width()//2, y + txt.get_height() + 8))
 
@@ -638,15 +640,15 @@ class App:
         self.screen.blit(ov,(0,0))
         names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
         nm=(names[wp%12]+str(wp//12-1)) if wp else "?"
-        f=pygame.font.SysFont("consolas",46,bold=True)
+        f=sys_font("consolas",46,bold=True)
         s=f.render(f"Play:  {nm}",True,NEON_GREEN)
         self.screen.blit(s,(W//2-s.get_width()//2,H//2-28))
-        h=pygame.font.SysFont("consolas",19).render(
+        h=sys_font("consolas",19).render(
             "EASY MODE — Play the highlighted note to continue",True,NEON_YELLOW)
         self.screen.blit(h,(W//2-h.get_width()//2,H//2+28))
 
     def _overlay_testing(self, W, H):
-        f=pygame.font.SysFont("consolas",17,bold=True)
+        f=sys_font("consolas",17,bold=True)
         s=f.render("◆ TESTING MODE — Notes play automatically ◆",True,NEON_ORANGE)
         bg=pygame.Surface((s.get_width()+22,s.get_height()+8),pygame.SRCALPHA)
         bg.fill((20,10,0,170))

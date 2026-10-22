@@ -5,6 +5,7 @@ Song select with difficulty picker, results with PB comparison.
 
 import os, math
 import pygame
+from game.fonts import sys_font
 from typing import Optional, List as TList
 from game.constants import *
 from game.midi_handler import SongData
@@ -15,11 +16,11 @@ class MenuBase:
     def __init__(self, screen):
         self.screen = screen
         self.W = screen.get_width(); self.H = screen.get_height()
-        self.fn_title = pygame.font.SysFont("consolas", 68, bold=True)
-        self.fn_large = pygame.font.SysFont("consolas", 40, bold=True)
-        self.fn_med   = pygame.font.SysFont("consolas", 26, bold=True)
-        self.fn_small = pygame.font.SysFont("consolas", 19)
-        self.fn_tiny  = pygame.font.SysFont("consolas", 14)
+        self.fn_title = sys_font("consolas", 68, bold=True)
+        self.fn_large = sys_font("consolas", 40, bold=True)
+        self.fn_med   = sys_font("consolas", 26, bold=True)
+        self.fn_small = sys_font("consolas", 19)
+        self.fn_tiny  = sys_font("consolas", 14)
         self._tick = 0.0
 
     def update(self, dt): self._tick += dt
@@ -33,9 +34,14 @@ class MenuBase:
         return s.get_height()
 
     def draw_bg(self):
-        self.screen.fill(DARK_BG)
-        for yy in range(0,self.H,4):
-            pygame.draw.line(self.screen,(0,0,0),(0,yy),(self.W,yy),1)
+        # Scanline background: drawn once per window size, then blitted
+        if getattr(self, "_bg_size", None) != (self.W, self.H):
+            self._bg_surf = pygame.Surface((self.W, self.H)).convert()
+            self._bg_surf.fill(DARK_BG)
+            for yy in range(0,self.H,4):
+                pygame.draw.line(self._bg_surf,(0,0,0),(0,yy),(self.W,yy),1)
+            self._bg_size = (self.W, self.H)
+        self.screen.blit(self._bg_surf, (0, 0))
 
     def neon_box(self, rect, color, border=2, alpha=55):
         s=pygame.Surface((rect[2],rect[3]),pygame.SRCALPHA)
@@ -88,7 +94,7 @@ class MainMenu(MenuBase):
 
         # ── KEYFALL title — large pulsing cyan with letter-spacing effect ──
         title_y = int(self.H * 0.08)
-        title_font = pygame.font.SysFont("consolas", max(72, int(self.H*0.13)), bold=True)
+        title_font = sys_font("consolas", max(72, int(self.H*0.13)), bold=True)
         letters = "KEYFALL"
         total_w = sum(title_font.size(ch)[0] for ch in letters) + len(letters)*4
         x = self.W//2 - total_w//2
@@ -107,7 +113,7 @@ class MainMenu(MenuBase):
 
         # ── Subtitle — spaced letters with pink/purple gradient ──
         sub_y = title_y + title_font.get_height() + 4
-        sub_font = pygame.font.SysFont("consolas", max(16, int(self.H*0.030)), bold=True)
+        sub_font = sys_font("consolas", max(16, int(self.H*0.030)), bold=True)
         subtitle = "MIDI  KEYBOARD  LEARNING  GAME"
         # Draw a neon underline bar behind it
         sw = sub_font.size(subtitle)[0]
@@ -488,7 +494,7 @@ class SongSelectMenu(MenuBase):
                 ph = pygame.Rect(cover_x,cover_y,COVER,COVER)
                 pygame.draw.rect(self.screen,(22,22,38),ph,border_radius=3)
                 pygame.draw.rect(self.screen,(45,45,65),ph,1,border_radius=3)
-                pf = pygame.font.SysFont("consolas",18,bold=True)
+                pf = sys_font("consolas",18,bold=True)
                 ps = pf.render("♪",True,(55,55,80))
                 self.screen.blit(ps,(ph.centerx-ps.get_width()//2,ph.centery-ps.get_height()//2))
 
@@ -498,7 +504,7 @@ class SongSelectMenu(MenuBase):
             sc_t = max(0.0, min(1.3, scale))
             base_size = 16
             sel_size  = 33
-            nf = pygame.font.SysFont("consolas", sel_size, bold=True)
+            nf = sys_font("consolas", sel_size, bold=True)
             nc = WHITE if sel else (140,140,165)
             name_s = nf.render(entry.title[:38], True, nc)
             txt_scale = (base_size/sel_size) + (1.0 - base_size/sel_size) * sc_t
@@ -548,7 +554,7 @@ class SongSelectMenu(MenuBase):
                         glow=pygame.Surface((dbr.w+6,dbr.h+6),pygame.SRCALPHA)
                         pygame.draw.rect(glow,(*dc,60),(0,0,dbr.w+6,dbr.h+6),2,border_radius=7)
                         self.screen.blit(glow,(dbr.x-3,dbr.y-3))
-                    df=pygame.font.SysFont("consolas",max(11,int(10+4*scale)),bold=is_cur)
+                    df=sys_font("consolas",max(11,int(10+4*scale)),bold=is_cur)
                     dt=df.render(d,True,WHITE if is_cur else dc)
                 self.screen.blit(dt,(dbr.centerx-dt.get_width()//2,
                                      dbr.centery-dt.get_height()//2))
@@ -629,7 +635,7 @@ class ResultsScreen(MenuBase):
             "A":NEON_GREEN,"B":NEON_YELLOW,"C":NEON_ORANGE,"F":NEON_RED}.get(self.grade,WHITE)
         pulse=1.0+0.06*math.sin(self._tick*3)
         gsz=72 if self.grade=="GODLIKE" else 108
-        gf=pygame.font.SysFont("consolas",int(gsz*pulse),bold=True)
+        gf=sys_font("consolas",int(gsz*pulse),bold=True)
         self.draw_centered(self.grade,gf,gc,88)
         col_w=self.W//2-20
         rows=[

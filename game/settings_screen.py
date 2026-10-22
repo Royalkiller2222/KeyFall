@@ -5,6 +5,7 @@ Clean two-column layout, all positions % of screen size.
 
 import os
 import pygame
+from game.fonts import sys_font
 from typing import Optional
 from game.constants import *
 
@@ -200,11 +201,11 @@ class SettingsScreen:
         s=self.save_data.get("settings",{})
 
         # Fonts
-        self.ft=pygame.font.SysFont("consolas",max(22,int(H*.052)),bold=True)
-        self.fl=pygame.font.SysFont("consolas",max(15,int(H*.032)),bold=True)
-        self.fm=pygame.font.SysFont("consolas",max(12,int(H*.025)),bold=True)
-        self.fs=pygame.font.SysFont("consolas",max(11,int(H*.022)))
-        self.fq=pygame.font.SysFont("consolas",max(9, int(H*.017)))
+        self.ft=sys_font("consolas",max(22,int(H*.052)),bold=True)
+        self.fl=sys_font("consolas",max(15,int(H*.032)),bold=True)
+        self.fm=sys_font("consolas",max(12,int(H*.025)),bold=True)
+        self.fs=sys_font("consolas",max(11,int(H*.022)))
+        self.fq=sys_font("consolas",max(9, int(H*.017)))
 
         # Layout: two equal columns
         pad=int(W*.04); gap=int(W*.04)

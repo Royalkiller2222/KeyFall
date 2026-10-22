@@ -2,16 +2,23 @@
 KeyFall - Renderer v8
 Highway lanes aligned to piano key widths.
 Black key lanes narrower + darker. White key lanes wider + brighter.
+
+Performance notes: the background + highway never change during a song, so they are drawn
+once into a cached surface; notes are found with a binary search instead of scanning the
+whole song; text labels and key shading are cached; particles are capped.
 """
 
-import math, random
+import bisect, math, random
 import pygame
+from game.fonts import sys_font
 from typing import List, Tuple, Dict
 from game.constants import *
 from game.midi_handler import MidiNote, SongData
 
 NOTE_NAMES      = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
 BLACK_SEMITONES = {1, 3, 6, 8, 10}
+MAX_PARTICLES   = 600          # dense songs used to spawn thousands (24 per PERFECT)
+_rng = random.Random()
 
 def pitch_name(p):   return NOTE_NAMES[p % 12]
 def is_black(p):     return (p % 12) in BLACK_SEMITONES
@@ -80,20 +87,8 @@ def compute_key_layout(all_pitches: List[int], x_left: int, total_w: int):
         kb[p] = (lx, rx, int(cx))
 
     # ── Highway layout ───────────────────────────────────────────
-    # The highway is a gapless piano-roll:
-    #   Each lane spans from the LEFT edge of the keyboard slot for
-    #   that pitch to the RIGHT edge — i.e. exactly what compute_key_layout
-    #   already assigned as the keyboard slot width, but for white keys
-    #   we extend to fill the space under adjacent black keys.
-    #
-    #   Strategy: work in keyboard-slot space.
-    #   White key lane left  = midpoint between this key's left edge
-    #                          and the center of the black key to its left
-    #                          (or the absolute left if no black key there).
-    #   White key lane right = midpoint between this key's right edge
-    #                          and the center of the black key to its right
-    #                          (or the absolute right if no black key there).
-    #   Black key lane       = same as keyboard position.
+    # Gapless piano-roll: white lanes extend to the centres of the neighbouring
+    # black keys, black lanes sit exactly where the black key is.
     hwy = {}
 
     # First pass: black keys copy directly from kb
@@ -190,6 +185,13 @@ class HighwayRenderer:
         self._hwy_layout: Dict[int, tuple] = {}   # highway lane positions (gap-free)
         self._kb_keys: list = []
         self._all_pitches: List[int] = []
+        # draw caches
+        self._static = None          # background + highway, drawn once per layout
+        self._static_key = None
+        self._edges: Dict[int, tuple] = {}       # pitch -> note edge lines (x at depth 0 and 1)
+        self._labels: Dict[tuple, pygame.Surface] = {}
+        self._shadows: Dict[tuple, pygame.Surface] = {}
+        self._note_index = (None, [], 0.0)       # (song, start times, longest note)
 
     def _init_geometry(self):
         self.W = self.screen.get_width()
@@ -208,12 +210,12 @@ class HighwayRenderer:
 
     def _init_fonts(self):
         s = self.H / 720
-        self.fn_hud_lg  = pygame.font.SysFont("consolas", max(22,int(44*s)), bold=True)
-        self.fn_hud_md  = pygame.font.SysFont("consolas", max(13,int(24*s)), bold=True)
-        self.fn_hud_sm  = pygame.font.SysFont("consolas", max(10,int(16*s)))
-        self.fn_note    = pygame.font.SysFont("consolas", max(8, int(12*s)), bold=True)
-        self.fn_key_lbl = pygame.font.SysFont("consolas", max(7, int(10*s)), bold=True)
-        self.fn_quality = pygame.font.SysFont("consolas", max(26,int(52*s)), bold=True)
+        self.fn_hud_lg  = sys_font("consolas", max(22,int(44*s)), bold=True)
+        self.fn_hud_md  = sys_font("consolas", max(13,int(24*s)), bold=True)
+        self.fn_hud_sm  = sys_font("consolas", max(10,int(16*s)))
+        self.fn_note    = sys_font("consolas", max(8, int(12*s)), bold=True)
+        self.fn_key_lbl = sys_font("consolas", max(7, int(10*s)), bold=True)
+        self.fn_quality = sys_font("consolas", max(26,int(52*s)), bold=True)
 
     def _build_bg(self):
         surf = pygame.Surface((self.W, self.H))
@@ -230,17 +232,27 @@ class HighwayRenderer:
         self._init_geometry(); self._init_fonts()
         self._bg = self._build_bg()
         self._layout_pitches = []   # force rebuild
+        self._static_key = None
+        self._labels.clear(); self._shadows.clear()
 
     # ── Layout management ─────────────────────────────────────────
     def _ensure_layout(self, lane_pitch_map: List[int]):
-        if self._layout_pitches == lane_pitch_map:
-            return
-        self._layout_pitches = list(lane_pitch_map)
-        self._all_pitches = build_keyboard_range(lane_pitch_map)
-        self._kb_layout, self._hwy_layout = compute_key_layout(
-            self._all_pitches, self.HWY_X0, self.HWY_W)
-        self._kb_keys = build_piano_key_rects(
-            self._kb_layout, self._all_pitches, self.PIANO_Y, self.PIANO_H)
+        if self._layout_pitches != lane_pitch_map:
+            self._layout_pitches = list(lane_pitch_map)
+            self._all_pitches = build_keyboard_range(lane_pitch_map)
+            self._kb_layout, self._hwy_layout = compute_key_layout(
+                self._all_pitches, self.HWY_X0, self.HWY_W)
+            self._kb_keys = build_piano_key_rects(
+                self._kb_layout, self._all_pitches, self.PIANO_Y, self.PIANO_H)
+            self._static_key = None
+        key = (tuple(self._layout_pitches), getattr(self, '_vanish_frac', 0.67), self.W, self.H)
+        if key != self._static_key:
+            # The highway only changes with the lanes, perspective or window size
+            self._static = pygame.Surface((self.W, self.H)).convert()
+            self._static.blit(self._bg, (0, 0))
+            self._draw_highway(self._static)
+            self._edges.clear()
+            self._static_key = key
 
     def _pitch_bounds(self, pitch: int) -> Tuple[int,int,int]:
         """Highway lane x_left, x_right, x_center — uses same bounds as keyboard."""
@@ -303,8 +315,7 @@ class HighwayRenderer:
         self._glow_tick += dt
 
         self._ensure_layout(lane_pitch_map)
-        self.screen.blit(self._bg, (0,0))
-        self._draw_highway(lane_pitch_map)
+        self.screen.blit(self._static, (0,0))   # background + highway (cached)
         self._draw_notes(song, current_time, lane_pitch_map)
         self._update_particles(dt)
         self._draw_hit_zone(lane_pitch_map, dt)
@@ -312,39 +323,17 @@ class HighwayRenderer:
 
 
 
-    # ── Highway ───────────────────────────────────────────────────
-    def _draw_highway(self, lpm: List[int]):
-        p2i = {p:i for i,p in enumerate(lpm)}
-
+    # ── Highway (static: drawn once into the cached layer) ─────────
+    def _draw_highway(self, surf: pygame.Surface):
+        # Lane background trapezoids. Projection is linear in depth, so each lane
+        # edge is a straight line and four corners describe the whole lane.
+        y_bot, y_top = self._depth_to_y(0.0), self._depth_to_y(1.0)
         for p in self._all_pitches:
-            blk = is_black(p)
-            in_lane = p in p2i
-
-            # Lane background trapezoid
             lx_b,rx_b,_ = self._pitch_bounds(p)
-            d_steps = 30
-            pts_l, pts_r = [], []
-            for s in range(d_steps+1):
-                d = s/d_steps
-                y = self._depth_to_y(d)
-                lx = self._project_x(lx_b, d)
-                rx = self._project_x(rx_b, d)
-                pts_l.append((lx, y))
-                pts_r.append((rx, y))
-
-            # Fill
-            if blk:
-                bg = (6,6,14)
-            else:
-                bg = (10,10,22)
-            poly = pts_l + list(reversed(pts_r))
-            pygame.draw.polygon(self.screen, bg, poly)
-
-        # Vertical lane dividers — only between adjacent pitches
-        for i, p in enumerate(self._all_pitches):
-            lx_b, _, _ = self._pitch_bounds(p)
-            for d in [0.0, 1.0]:
-                pass  # drawn as lines below
+            bg = (6,6,14) if is_black(p) else (10,10,22)
+            pygame.draw.polygon(surf, bg, [
+                (self._project_x(lx_b, 0.0), y_bot), (self._project_x(lx_b, 1.0), y_top),
+                (self._project_x(rx_b, 1.0), y_top), (self._project_x(rx_b, 0.0), y_bot)])
 
         # Draw divider lines between ALL adjacent lanes.
         # White-white boundaries (B-C, E-F) get a slightly brighter line so
@@ -358,13 +347,13 @@ class HighwayRenderer:
             pair = (p%12, next_p%12)
             if pair in NO_BLACK_BETWEEN:
                 # White-white boundary: brighter line so B and C look separate
-                pygame.draw.line(self.screen, (40,40,65), (tx,ty),(bx,by), 2)
+                pygame.draw.line(surf, (40,40,65), (tx,ty),(bx,by), 2)
             else:
-                pygame.draw.line(self.screen, (18,18,35), (tx,ty),(bx,by), 1)
+                pygame.draw.line(surf, (18,18,35), (tx,ty),(bx,by), 1)
         # Right edge of last key
         _, rx_b, _ = self._pitch_bounds(self._all_pitches[-1])
         tx=self._project_x(rx_b,1.0); bx=self._project_x(rx_b,0.0)
-        pygame.draw.line(self.screen,(18,18,35),(tx,self._depth_to_y(1.0)),(bx,self._depth_to_y(0.0)),1)
+        pygame.draw.line(surf,(18,18,35),(tx,self._depth_to_y(1.0)),(bx,self._depth_to_y(0.0)),1)
 
         # Horizontal depth grid
         for g in range(20):
@@ -375,7 +364,7 @@ class HighwayRenderer:
             lx = self._project_x(lx_b, d)
             rx = self._project_x(rx_b, d)
             a = int(lerp(55,3,d))
-            pygame.draw.line(self.screen,(a//4,a//4,a),(lx,y),(rx,y),1)
+            pygame.draw.line(surf,(a//4,a//4,a),(lx,y),(rx,y),1)
 
         # Outer neon edge glow
         p0 = self._all_pitches[0];  pN = self._all_pitches[-1]
@@ -384,56 +373,63 @@ class HighwayRenderer:
             a = max(4,55-off*13)
             lt_x=self._project_x(lx0_b,1.0); lb_x=self._project_x(lx0_b,0.0)
             rt_x=self._project_x(rxN_b,1.0); rb_x=self._project_x(rxN_b,0.0)
-            pygame.draw.line(self.screen,(0,a,a),
+            pygame.draw.line(surf,(0,a,a),
                 (lt_x-off,self._depth_to_y(1.0)),(lb_x-off,self._depth_to_y(0.0)),1)
-            pygame.draw.line(self.screen,(0,a,a),
+            pygame.draw.line(surf,(0,a,a),
                 (rt_x+off,self._depth_to_y(1.0)),(rb_x+off,self._depth_to_y(0.0)),1)
 
     # ── Notes ─────────────────────────────────────────────────────
     def _draw_notes(self, song: SongData, t: float, lpm: List[int]):
-        p2i = {p:i for i,p in enumerate(lpm)}
+        if self._note_index[0] is not song:   # index built once per song
+            self._note_index = (song, [n.time_sec for n in song.notes],
+                                max((n.duration_sec for n in song.notes), default=0.0))
+        _, starts, longest = self._note_index
+        in_song = set(lpm)
         end = t + NOTE_LOOKAHEAD_SECS
-        # Fade in over first 1.5 seconds of song
-
-
-        for note in song.notes:
+        notes = song.notes
+        # First note that can still be on screen (a note ends at most `longest` after it starts)
+        first = bisect.bisect_left(starts, t - 0.15 - longest)
+        for i in range(first, len(notes)):
+            note = notes[i]
             if note.time_sec > end: break
             if note.time_sec + note.duration_sec < t-0.15: continue
-            if note.pitch not in p2i: continue
+            if note.pitch not in in_song: continue
 
-            li  = p2i[note.pitch]
-            col = self._lane_col(note.pitch, li)
             df  = clamp((note.time_sec - t)/NOTE_LOOKAHEAD_SECS, 0.0, 1.0)
             db  = clamp((note.time_sec + note.duration_sec - t)/NOTE_LOOKAHEAD_SECS, 0.0, 1.0)
             if df>=1.0 and db>=1.0: continue
             if df<=0.0 and db<=0.0: continue
-            self._draw_note_block(note.pitch, df, db, col)
+            self._draw_note_block(note.pitch, df, db, self._lane_col(note.pitch, 0))
+
+    def _note_edges(self, pitch):
+        """x of a note's left/right edge at depth 0 and depth 1 (edges are straight lines)."""
+        e = self._edges.get(pitch)
+        if e is None:
+            lx_b, rx_b, _ = self._pitch_bounds(pitch)
+            mg = 0.5 if is_black(pitch) else 1.5
+            e = self._edges[pitch] = (lx_b + mg, self._project_x(lx_b + mg, 1.0),
+                                      rx_b - mg, self._project_x(rx_b - mg, 1.0))
+        return e
 
     def _draw_note_block(self, pitch, df, db, color):
-        lx_b, rx_b, cx_b = self._pitch_bounds(pitch)
+        l0, l1, r0, r1 = self._note_edges(pitch)
         blk = is_black(pitch)
-        mg = 0.5 if blk else 1.5
-
+        y_bot, y_span = self.HWY_BOT, self.HWY_TOP - self.HWY_BOT
         def corners(d):
-            y  = self._depth_to_y(d)
-            lx = self._project_x(lx_b + mg, d)
-            rx = self._project_x(rx_b - mg, d)
-            cx = self._project_x(cx_b, d)
-            return (lx,y),(rx,y),(cx,y)
+            y = int(y_bot + y_span * d)
+            return (int(l0 + (l1 - l0) * d), y), (int(r0 + (r1 - r0) * d), y)
 
-        lt,rt,_ = corners(db)
-        lb,rb,_ = corners(df)
-
+        lt,rt = corners(db)
+        lb,rb = corners(df)
         dark = tuple(max(0,int(c*0.5)) for c in color)
-        pygame.draw.polygon(self.screen, dark, [lt,rt,rb,lb])
 
-        # Gradient strips
-        steps = max(2,(lb[1]-lt[1])//5)
+        # Gradient strips (bounded: a long held note used to be ~100 polygons)
+        steps = max(2, min(24, (lb[1]-lt[1]) // 8))
+        prev_l, prev_r = lb, rb
         for s in range(steps):
-            t0,t1 = s/steps,(s+1)/steps
-            l0,r0,_ = corners(lerp(df,db,t0))
-            l1,r1,_ = corners(lerp(df,db,t1))
-            pygame.draw.polygon(self.screen, lerpC(color,dark,t0),[l1,r1,r0,l0])
+            nl, nr = corners(lerp(df, db, (s+1)/steps))
+            pygame.draw.polygon(self.screen, lerpC(color,dark,s/steps), [nl, nr, prev_r, prev_l])
+            prev_l, prev_r = nl, nr
 
         bright = tuple(min(255,int(c*1.7)) for c in color)
         pygame.draw.line(self.screen, bright, lb, rb, 3)
@@ -446,12 +442,12 @@ class HighwayRenderer:
             edge_col = tuple(min(255,int(c*1.4)) for c in color)
         pygame.draw.line(self.screen, edge_col, lt, lb, 1)
 
-        tip_cx = (lb[0]+rb[0])//2
-        tip_cy = lb[1] - 2
-        lbl_color = (15,15,15) if not blk else (200,200,220)
-        lbl = self.fn_note.render(pitch_name(pitch), True, lbl_color)
-        dx = tip_cx - lbl.get_width()//2
-        dy = tip_cy - lbl.get_height()
+        lbl = self._labels.get((pitch % 12, blk))
+        if lbl is None:
+            lbl_color = (15,15,15) if not blk else (200,200,220)
+            lbl = self._labels[(pitch % 12, blk)] = self.fn_note.render(pitch_name(pitch), True, lbl_color)
+        dx = (lb[0]+rb[0])//2 - lbl.get_width()//2
+        dy = lb[1] - 2 - lbl.get_height()
         if 0<=dx<self.W and 0<=dy<self.H:
             self.screen.blit(lbl,(dx,dy))
 
@@ -464,7 +460,6 @@ class HighwayRenderer:
             lx_b,rx_b,cx_b = self._pitch_bounds(p)
             lx = self._project_x(lx_b, 0.0)
             rx = self._project_x(rx_b, 0.0)
-            cx = self._project_x(cx_b, 0.0)
             in_lane = p in p2i
 
             if in_lane:
@@ -524,11 +519,19 @@ class HighwayRenderer:
         pygame.draw.line(self.screen, (0, 200, 255), (lxf, y), (rxf, y), 2)
 
     # ── Piano keyboard ────────────────────────────────────────────
+    def _key_shadow(self, w, h):
+        """Top-edge shading for an unpressed white key (cached per key size)."""
+        sh = self._shadows.get((w, h))
+        if sh is None:
+            sh = self._shadows[(w, h)] = pygame.Surface((w, h), pygame.SRCALPHA)
+            for gg in range(h):
+                a = int(45*(1-gg/h))
+                pygame.draw.line(sh, (0,0,0,a), (0,gg), (w,gg))
+        return sh
+
     def _draw_keyboard(self, lpm: List[int], pressed: set = None):
         if not self._kb_keys: return
         pressed = pressed or set()
-        active = set(lpm)
-        p2i = {p:i for i,p in enumerate(lpm)}
 
         # Use keyboard layout (not highway) for keyboard bounds
         lx0_b = self._kb_layout[self._all_pitches[0]][0]
@@ -544,16 +547,15 @@ class HighwayRenderer:
             fill = (120,240,255) if is_pressed else (225,225,225)
             pygame.draw.rect(self.screen, fill, rect, border_radius=3)
             if not is_pressed:
-                sh=pygame.Surface((rect.w,min(rect.h//3,18)),pygame.SRCALPHA)
-                for gg in range(sh.get_height()):
-                    a=int(45*(1-gg/sh.get_height()))
-                    pygame.draw.line(sh,(0,0,0,a),(0,gg),(sh.get_width(),gg))
-                self.screen.blit(sh,(rect.x,rect.y))
+                self.screen.blit(self._key_shadow(rect.w, min(rect.h//3,18)), (rect.x, rect.y))
             border = (0,200,220) if is_pressed else (80,80,90)
             pygame.draw.rect(self.screen, border, rect, 2 if is_pressed else 1, border_radius=3)
             if rect.h>30:
-                lbl_col = (0,40,60) if is_pressed else (70,70,80)
-                lbl=self.fn_key_lbl.render(pitch_name(p),True,lbl_col)
+                lbl = self._labels.get(("key", p % 12, is_pressed))
+                if lbl is None:
+                    lbl_col = (0,40,60) if is_pressed else (70,70,80)
+                    lbl = self._labels[("key", p % 12, is_pressed)] = \
+                        self.fn_key_lbl.render(pitch_name(p),True,lbl_col)
                 self.screen.blit(lbl,(rect.centerx-lbl.get_width()//2,
                                      rect.bottom-lbl.get_height()-3))
 
@@ -573,7 +575,6 @@ class HighwayRenderer:
 
         # Show pressed key names above keyboard
         if pressed:
-            NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
             names = []
             for p in sorted(pressed):
                 if p in self._kb_layout:
@@ -596,28 +597,31 @@ class HighwayRenderer:
 
     def spawn_hit_particles(self, li, n, color, quality):
         if li >= len(self._layout_pitches): return
+        self.hit_flashes[li]=(color,0.18)
+        room = MAX_PARTICLES - len(self.particles)
+        if room <= 0: return
         pitch = self._layout_pitches[li]
         lx_b,rx_b,cx_b = self._pitch_bounds(pitch)
         cx = self._project_x(cx_b, 0.0); y = self.HIT_Y
-        count={"PERFECT":24,"GREAT":14,"GOOD":7,"GODLIKE":35}.get(quality,4)
-        rng=random.Random()
+        count = min(room, {"PERFECT":24,"GREAT":14,"GOOD":7,"GODLIKE":35}.get(quality,4))
+        bright=tuple(min(255,int(c*1.5)) for c in color)
         for _ in range(count):
-            ang=rng.uniform(-math.pi,0); spd=rng.uniform(80,310)
-            bright=tuple(min(255,int(c*1.5)) for c in color)
+            ang=_rng.uniform(-math.pi,0); spd=_rng.uniform(80,310)
             self.particles.append(Particle(cx,y,bright,
-                math.cos(ang)*spd,math.sin(ang)*spd,rng.uniform(0.3,0.9),rng.randint(3,8)))
-        self.hit_flashes[li]=(color,0.18)
+                math.cos(ang)*spd,math.sin(ang)*spd,_rng.uniform(0.3,0.9),_rng.randint(3,8)))
 
     def spawn_miss_particles(self, li, n):
         if li >= len(self._layout_pitches): return
+        self.miss_flashes[li]=0.22
+        room = MAX_PARTICLES - len(self.particles)
+        if room <= 0: return
         pitch = self._layout_pitches[li]
         lx_b,rx_b,cx_b = self._pitch_bounds(pitch)
-        cx=self._project_x(cx_b,0.0); rng=random.Random()
-        for _ in range(7):
-            ang=rng.uniform(-math.pi,0); spd=rng.uniform(35,130)
+        cx=self._project_x(cx_b,0.0)
+        for _ in range(min(7, room)):
+            ang=_rng.uniform(-math.pi,0); spd=_rng.uniform(35,130)
             self.particles.append(Particle(cx,self.HIT_Y,(215,20,20),
                 math.cos(ang)*spd,math.sin(ang)*spd,0.4,3))
-        self.miss_flashes[li]=0.22
 
     def _draw_multiplier_glow(self, multiplier: int):
         """Dashed bright border lines on strike zone at x4/x8."""
