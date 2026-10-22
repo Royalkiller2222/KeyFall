@@ -119,6 +119,8 @@ class PauseMenu:
 
 class App:
     def __init__(self):
+        # Must come before pygame.init(), which opens the mixer with default settings
+        pygame.mixer.pre_init(44100, -16, 2, 512)
         pygame.init()
         pygame.display.set_caption(WINDOW_TITLE)
         self._fullscreen = False
@@ -133,21 +135,13 @@ class App:
         self.save_data = load_save()
         self.xp_system = XPSystem(self.save_data.get("total_xp", 0))
 
+        self.state = STATE_MENU
         self.audio = AudioManager()
-        self.audio.apply_settings(self.save_data.get("settings", {}))
         # Only allow auto-play of menu music when in a menu state
         self.audio._music_allowed_cb = lambda: self.state in (STATE_MENU, STATE_SETTINGS)
-        # Init soundfont in background if mode is soundfont
-        _mode = self.save_data.get("settings",{}).get("note_sound_mode","soundfont")
-        if _mode == "soundfont":
-            import threading as _th
-            _th.Thread(target=self.audio.init_soundfont, daemon=True).start()
-        _mf = self.save_data.get("settings", {}).get("menu_music_file", "[Default Synth]")
-        if _mf and _mf != "[Default Synth]":
-            import os as _os
-            from game.constants import SONGS_DIR as _SD
-            self.audio.load_menu_music_from_midi(_os.path.join(_SD, _mf))
-        self.audio.connect_midi_out(self.save_data.get("settings",{}).get("midi_out_port"))
+        # Loads the saved soundfont, then renders and starts the menu music - all in one
+        # background thread (this used to start the 118 MB soundfont load twice)
+        self.audio.apply_settings(self.save_data.get("settings", {}))
 
         self.midi_input = MidiInputHandler()
         self.midi_input.connect()
@@ -166,7 +160,6 @@ class App:
         self._kb_pitch_map = {}
 
         self._build_main_menu()
-        self._auto_load_menu_music()
         self.audio.start_menu_music()
 
         self._selftest = (selftest.SelfTest(self, os.path.join(BASE_DIR, "keyfall_selftest.txt"))
@@ -177,20 +170,6 @@ class App:
 
     def _load_songs(self):
         return scan_songs_library()
-
-    def _auto_load_menu_music(self):
-        """Check songs/_menu_music/ for a MIDI and auto-use it as menu music."""
-        import os as _os
-        menu_dir = _os.path.join("songs", "_menu_music")
-        if not _os.path.isdir(menu_dir):
-            return
-        for fname in sorted(_os.listdir(menu_dir)):
-            if fname.lower().endswith((".mid", ".midi")):
-                full = _os.path.join(menu_dir, fname)
-                print(f"[Audio] Auto menu music: {fname}")
-                self.audio.load_menu_music_from_midi(full)
-                self.audio._current_music_file = full
-                return  # use first file found
 
     def _refresh_songs(self):
         """Reload song library and update song select menu."""
@@ -235,7 +214,7 @@ class App:
         # Apply vanishing point AFTER renderer is created
         vf = self.save_data.get("settings",{}).get("vanish_frac", 0.67)
         self.renderer._vanish_frac = vf
-        self.audio.precache_tones(list(set(n.pitch for n in song.notes)))
+        self.audio.all_notes_off(120)   # cut song-preview / previous-run notes
         self.engine.on_auto_note = self._on_auto_note
         self.midi_input._callbacks.clear()
         self.midi_input.add_callback(self._on_midi_note)
@@ -259,7 +238,7 @@ class App:
         self._start_song(self.current_song, mode, getattr(self, "_current_speed", 1.0))
 
     def _on_auto_note(self, pitch, velocity, duration=0.5):
-        self.audio.play_note(pitch, velocity)
+        self.audio.play_note(pitch, velocity, duration)
         if self.renderer and self.engine and pitch in self.engine.lane_pitch_map:
             li = self.engine.lane_pitch_map.index(pitch)
             self.renderer.spawn_hit_particles(li, self.engine.num_lanes,
@@ -284,15 +263,16 @@ class App:
     def _on_midi_note(self, pitch, velocity, is_on):
         if self.state == STATE_FREEPLAY and self.free_play:
             if is_on and velocity > 0:
-                self.audio.play_note(pitch, velocity)
-                self.free_play._held.add(pitch)
-                self.free_play._flashes[pitch] = 0.5
+                self.free_play.press(pitch, velocity, flash=0.5)
             else:
-                self.free_play._held.discard(pitch)
+                self.free_play.release(pitch)
             return
-        if self.state == STATE_PLAYING and self.engine and is_on:
+        if self.state == STATE_PLAYING and self.engine:
+            if not (is_on and velocity > 0):
+                self.audio.note_off(pitch)
+                return
             t_press = time.perf_counter()
-            self.audio.play_note(pitch, velocity)   # always hear what you play
+            self.audio.note_on(pitch, velocity)   # always hear what you play
             self._apply_result(self.engine.on_midi_note(pitch, velocity, True, t_press))
 
     def _leaderboard_key(self):
@@ -343,6 +323,7 @@ class App:
                         self.renderer.on_resize(event.w,event.h)
                 if self._handle_event(event) == "quit": running = False
             self._update(dt)
+            self.audio.update()
             self._draw(dt)
             # Version + FPS — position depends on state
             fps = self.clock.get_fps()
@@ -412,8 +393,9 @@ class App:
                     self._start_song(song, mode, speed=speed)
                 elif action == "back":
                     self.audio.play_sfx("back")
-                    self.audio.start_menu_music()   # restart music when going back
+                    self.audio.all_notes_off()      # stop the song preview
                     self.state = STATE_MENU
+                    self.audio.start_menu_music()   # restart music when going back
 
         elif self.state == STATE_PLAYING:
             if event.type == pygame.KEYDOWN:
@@ -428,8 +410,10 @@ class App:
                     self._end_song()
                 elif event.key in self._kb_pitch_map:
                     pitch = self._kb_pitch_map[event.key]
-                    self.audio.play_note(pitch, 80)   # always hear what you play
+                    self.audio.note_on(pitch, 80)   # always hear what you play
                     self._apply_result(self.engine.on_midi_note(pitch, 80, True))
+            elif event.type == pygame.KEYUP and event.key in self._kb_pitch_map:
+                self.audio.note_off(self._kb_pitch_map[event.key])
 
         elif self.state == STATE_PAUSE_MENU:
             action = self.pause_menu.handle_event(event)
@@ -451,11 +435,12 @@ class App:
                 self.pause_menu.mode = self.engine.mode
             elif action == "menu":
                 self.audio.play_sfx("back")
+                self.audio.all_notes_off()
                 self.midi_input._callbacks.clear()
                 self.engine = None; self.renderer = None
                 self._build_main_menu()
-                self.audio.start_menu_music()
                 self.state = STATE_MENU
+                self.audio.start_menu_music()
 
         elif self.state == STATE_RESULTS:
             action = self.results_screen.handle_event(event)
@@ -467,19 +452,20 @@ class App:
             elif action == "menu":
                 self.audio.play_sfx("back")
                 self._build_main_menu()
+                self.state = STATE_MENU            # (before starting music: it checks the state)
                 self.audio.start_menu_music()
-                self.state = STATE_MENU
 
         elif self.state == STATE_FREEPLAY:
             if self.free_play:
                 action = self.free_play.handle_event(event)
                 if action == "back":
                     self.audio.play_sfx("back")
+                    self.audio.all_notes_off()
                     self.free_play = None
                     self.midi_input._callbacks.clear()
                     self._build_main_menu()
-                    self.audio.start_menu_music()
                     self.state = STATE_MENU
+                    self.audio.start_menu_music()
                 elif action == "fullscreen":
                     self._toggle_fullscreen()
 
@@ -492,8 +478,8 @@ class App:
                 self._paused_state = None
                 if prev == STATE_MENU:
                     self._build_main_menu()
-                    self.audio.start_menu_music()
                     self.state = STATE_MENU
+                    self.audio.start_menu_music()
                 elif prev in (STATE_PAUSE_MENU,):
                     # Return to pause menu (song is still paused)
                     self.state = STATE_PAUSE_MENU
@@ -501,8 +487,8 @@ class App:
                     self.state = STATE_SONG_SELECT
                 else:
                     self._build_main_menu()
-                    self.audio.start_menu_music()
                     self.state = STATE_MENU
+                    self.audio.start_menu_music()
         return None
 
     def _update(self, dt):

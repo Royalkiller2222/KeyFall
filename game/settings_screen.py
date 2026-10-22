@@ -304,8 +304,7 @@ class SettingsScreen:
                         box._open = True
             self.vel_sl.on_mouse_down(event.pos)
             if self.btn_test.on_mouse_down(event.pos):
-                try: self.audio.play_note_isolated(60,90)
-                except: self.audio.play_note(60,90)
+                self.audio.play_note(60, 90, 1.0)
             if self.btn_save.on_mouse_down(event.pos):
                 self.audio.play_sfx("confirm"); self._save(); self._build(); return None
             if self.btn_back.on_mouse_down(event.pos):
@@ -345,7 +344,8 @@ class SettingsScreen:
         self.audio.update_volumes()
 
     def _save(self):
-        settings={
+        settings = dict(self.save_data.get("settings", {}))   # keep keys this screen doesn't edit
+        settings.update({
             "master_volume":    self.sliders[0].value,
             "music_volume":     self.sliders[1].value,
             "sfx_volume":       self.sliders[2].value,
@@ -355,74 +355,16 @@ class SettingsScreen:
             "midi_out_port":    self.port_sel.value,
             "default_game_mode":self.gm_sel.value,
             "midi_out_velocity":int(self.vel_sl.value*127),
-"vanish_frac": self._vp_vals[self.vp_sel.selected],
-            "menu_music_file":  "[Default Synth]",
+            "vanish_frac":      self._vp_vals[self.vp_sel.selected],
             "sf2_file": (self.sf2_cat_sel.value + "/" + self.sf2_file_sel.value
                           if self.sf2_cat_sel.value != "uncategorized"
                           else self.sf2_file_sel.value),
-        }
+        })
+        settings.pop("menu_music_file", None)   # menu music always comes from songs/_menu_music
         self.save_data["settings"]=settings
-        # Apply soundfont change only if file actually changed
-        sf2f = settings.get("sf2_file","piano.sf2")
-        import game.fluidsynth_engine as _fe
-        from game.fluidsynth_engine import resolve_sf2_path
-        sf2_changed = (sf2f != getattr(_fe, "_current_sf2", None))
-        _fe.SF2_PATH = resolve_sf2_path(sf2f)
-        _fe._current_sf2 = sf2f
-        if sf2_changed:
-            _fe._sample_cache.clear()
-            _fe._sf2_reader = None
-            self.audio._fluid_ready = False
+        # Reloads the soundfont (and re-renders the menu music) only if the soundfont changed;
+        # pressing SAVE used to re-synthesize the whole menu music every time.
         self.audio.apply_settings(settings)
-
-        mf = settings.get("menu_music_file","[Default Synth]")
-        self.audio.stop_menu_music(200)
-        self.audio._menu_music = None
-
-        import threading as _th, os as _os
-        audio_ref = self.audio
-
-        def _reload_music():
-            import time as _t
-            # Always ensure SF2 is loaded before synthesising MIDI music
-            if settings.get("note_sound_mode","soundfont") == "soundfont":
-                if not audio_ref._fluid_ready:
-                    audio_ref.init_soundfont()  # blocking
-                for _ in range(50):
-                    if audio_ref._fluid_ready: break
-                    _t.sleep(0.1)
-
-            # Resolve which MIDI file to use:
-            # Priority 1: explicit selection in music_sel (not [Default Synth])
-            # Priority 2: _menu_music folder auto-detection
-            # Priority 3: synth fallback
-            midi_path = None
-            if mf != "[Default Synth]":
-                candidate = _os.path.join(SONGS_DIR, mf)
-                if _os.path.exists(candidate):
-                    midi_path = candidate
-            if midi_path is None:
-                # Check _menu_music folder
-                mm_dir = _os.path.join(SONGS_DIR, "_menu_music")
-                if _os.path.isdir(mm_dir):
-                    for fname in sorted(_os.listdir(mm_dir)):
-                        if fname.lower().endswith((".mid", ".midi")):
-                            midi_path = _os.path.join(mm_dir, fname)
-                            break
-
-            if midi_path:
-                print(f"[Audio] Reloading menu music: {_os.path.basename(midi_path)}")
-                audio_ref.load_menu_music_from_midi(midi_path)
-            else:
-                print("[Audio] Generating menu music (synth fallback)...")
-                audio_ref._current_music_file = "[Default Synth]"
-                audio_ref._start_music_generation()
-                for _ in range(80):
-                    if audio_ref._menu_music: break
-                    _t.sleep(0.1)
-                audio_ref.start_menu_music()
-
-        _th.Thread(target=_reload_music, daemon=True).start()
         # Apply vanish_frac to renderer immediately if available
         if self.renderer:
             self.renderer._vanish_frac = settings.get("vanish_frac", 0.67)
@@ -466,7 +408,7 @@ class SettingsScreen:
         if self.mode_sel.value=="soundfont":
             try: st=self.audio.soundfont_status()
             except: st="unavailable"
-            sc=NEON_GREEN if st=="Ready" else NEON_ORANGE
+            sc=NEON_GREEN if st.startswith("Ready") else NEON_ORANGE
             ss=self.fq.render(f"  ● {st}",True,sc)
             self.screen.blit(ss,(self._c2,self.mode_sel.rect.bottom+2))
 

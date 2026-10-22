@@ -382,9 +382,8 @@ class SongSelectMenu(MenuBase):
             self._prev_idx=self.selected; self._prev_timer=0.0
             self._prev_note_i=0; self._prev_t=0.0
             self._prev_diff=cur_diff
-            # Stop any lingering notes immediately
-            try: self.audio._tone_cache.clear()
-            except: pass
+            # Stop the previous song's preview notes
+            if self.audio: self.audio.all_notes_off(150)
         if (self.audio and self._prev_timer>=self.PREVIEW_DELAY
                 and self.entries and 0<=self.selected<len(self.entries)):
             entry=self.entries[self.selected]
@@ -395,10 +394,8 @@ class SongSelectMenu(MenuBase):
                 while self._prev_note_i<len(song.notes):
                     note=song.notes[self._prev_note_i]
                     if note.time_sec<=self._prev_t:
-                        orig=self.audio.note_volume
-                        self.audio.note_volume=orig*0.45
-                        self.audio.play_note(note.pitch,min(80,note.velocity))
-                        self.audio.note_volume=orig
+                        self.audio.play_note(note.pitch, min(80, note.velocity),
+                                             note.duration_sec, volume_scale=0.45)
                         self._prev_note_i+=1
                     else: break
                 # Loop: restart from beginning when song ends

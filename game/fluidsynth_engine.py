@@ -1,9 +1,13 @@
 """
 KeyFall - Soundfont Engine
-Pure Python SF2 reader using pygame mixer. No external DLLs needed.
+Pure-Python SF2 sample player for pygame.mixer (no FluidSynth DLL needed, despite the name).
+
+It reads the SF2 sample headers, takes one sample per root pitch, and pre-renders one Sound
+per piano key when the soundfont loads (in a background thread). Playing a note is then just
+"pick a mixer channel and play it" - nothing is built while you play.
 """
 
-import os, struct, threading
+import mmap, os, struct
 import numpy as np
 import pygame
 from typing import Dict, Optional
@@ -16,8 +20,10 @@ else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FLUID_DIR = os.path.join(BASE_DIR, "fluidsynth")
 SF2_PATH  = os.path.join(FLUID_DIR, "pianos", "piano.sf2")
-print(f"[SF2] Base dir: {BASE_DIR}")
-print(f"[SF2] Fluid dir: {FLUID_DIR}")
+
+KEY_RANGE    = range(21, 109)   # A0..C8, every key is pre-rendered
+MAX_NOTE_SEC = 4.0              # longest a note rings; key release / sustain end it sooner
+FADE_FRAC    = 0.35             # fade over the last 35% so the cut-off is never audible
 
 def list_sf2_files() -> list:
     """Return flat list of 'category/file.sf2' and bare 'file.sf2' entries."""
@@ -60,43 +66,51 @@ def resolve_sf2_path(entry: str) -> str:
         return os.path.join(FLUID_DIR, cat, fname)
     return os.path.join(FLUID_DIR, entry)
 
-def set_sf2_path(filename: str):
+def find_fallback_sf2() -> Optional[str]:
+    """Entry of the first usable soundfont, preferring the pianos folder."""
+    entries = list_sf2_files()
+    entries.sort(key=lambda e: not e.lower().startswith("pianos/"))
+    for e in entries:
+        if os.path.getsize(resolve_sf2_path(e)) >= 100_000:
+            return e
+    return None
+
+def set_sf2_path(entry: str):
     global SF2_PATH, _current_sf2
-    SF2_PATH = os.path.join(FLUID_DIR, filename)
-    _current_sf2 = filename
+    SF2_PATH = resolve_sf2_path(entry)
+    _current_sf2 = entry
 
 FLUID_AVAILABLE = False
-_sample_cache: Dict[int, Optional[pygame.mixer.Sound]] = {}
-_current_sf2: str = "piano.sf2"
-_sf2_reader = None
-_sample_rate = 44100
+_sounds: Dict[int, pygame.mixer.Sound] = {}   # key -> pre-rendered Sound
+_pcm: Dict[int, np.ndarray] = {}              # key -> mono int16 samples (menu music renderer)
+_current_sf2: str = "pianos/piano.sf2"
 
 
 def sf2_exists() -> bool:
     return os.path.exists(SF2_PATH) and os.path.getsize(SF2_PATH) > 100_000
-
-def fluidsynth_dll_exists() -> bool:
-    return True
 
 def is_available() -> bool:
     return FLUID_AVAILABLE
 
 
 class SF2Reader:
-    """Robust SF2 soundfont parser."""
+    """Reads SF2 sample headers. The file is memory-mapped, not loaded into RAM."""
 
     def __init__(self, path: str):
-        with open(path, "rb") as f:
-            self.data = f.read()
+        self._file = open(path, "rb")
+        self.data = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         self.samples: Dict[int, dict] = {}
         self._smpl_start = 0
         self._smpl_size  = 0
         self._parse()
 
+    def close(self):
+        self.data.close()
+        self._file.close()
+
     def _u32(self, o): return struct.unpack_from("<I", self.data, o)[0]
     def _u16(self, o): return struct.unpack_from("<H", self.data, o)[0]
     def _u8(self,  o): return self.data[o]
-    def _tag(self, o): return self.data[o:o+4]
 
     def _find_chunk(self, tag: bytes, start: int, stop: int) -> Optional[tuple]:
         """Scan for a chunk with given 4-byte tag between start and stop."""
@@ -164,7 +178,6 @@ class SF2Reader:
 
             # Parse sample headers — 46 bytes each
             n = shdr_size // 46
-            print(f"[SF2] Parsing {n} sample headers")
             count = 0
             for i in range(n - 1):  # last entry is EOS sentinel
                 off   = shdr_start + i * 46
@@ -198,71 +211,41 @@ class SF2Reader:
             traceback.print_exc()
 
 
-def _build_sound(sf2: SF2Reader, pitch: int) -> Optional[pygame.mixer.Sound]:
-    try:
-        if not sf2.samples:
-            return None
-
-        # Find nearest sample
-        closest = min(sf2.samples.keys(), key=lambda p: abs(p - pitch))
-        info = sf2.samples[closest]
-
-        # Extract raw PCM (16-bit signed)
-        byte_start = info["start"] * 2
-        byte_end   = info["end"]   * 2
-        if byte_end > sf2._smpl_size or byte_end <= byte_start:
-            return None
-
-        raw = sf2.data[sf2._smpl_start + byte_start :
-                       sf2._smpl_start + byte_end]
-        pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-
-        # Pitch shift
-        semitones = pitch - closest
-        if semitones != 0:
-            ratio = 2.0 ** (semitones / 12.0)
-            n_out = int(len(pcm) / ratio)
-            if n_out > 10:
-                idx = np.linspace(0, len(pcm)-1, n_out)
-                pcm = np.interp(idx, np.arange(len(pcm)), pcm)
-
-        # Resample to pygame rate
-        src_sr = info["sample_rate"]
-        if src_sr > 0 and src_sr != _sample_rate:
-            ratio = _sample_rate / src_sr
-            n_out = int(len(pcm) * ratio)
-            if n_out > 10:
-                idx = np.linspace(0, len(pcm)-1, n_out)
-                pcm = np.interp(idx, np.arange(len(pcm)), pcm)
-
-        # Decay envelope — 2 second max
-        max_samples = _sample_rate * 2
-        if len(pcm) > max_samples:
-            pcm = pcm[:max_samples]
-        n = len(pcm)
-        if n > 0:
-            fade_start = int(n * 0.6)
-            fade_len   = n - fade_start
-            if fade_len > 0:
-                pcm[fade_start:] *= np.linspace(1.0, 0.0, fade_len)
-
-        # Normalize to ~70% of int16 range
-        peak = np.max(np.abs(pcm))
-        if peak > 0:
-            pcm = pcm / peak * 18000.0  # 55% of int16 — more headroom for mixing
-
-        pcm = np.clip(pcm, -32767, 32767).astype(np.int16)
-        stereo = np.column_stack([pcm, pcm])
-        return pygame.sndarray.make_sound(stereo)
-
-    except Exception as e:
-        print(f"[SF2] build_sound error pitch={pitch}: {e}")
+def _render_key(sf2: SF2Reader, pitch: int, rate: int) -> Optional[np.ndarray]:
+    """Mono int16 audio for one key: the nearest SF2 sample, pitch-shifted and resampled
+    to the mixer rate in a single pass, trimmed to MAX_NOTE_SEC with a fade-out."""
+    if not sf2.samples:
         return None
+    closest = min(sf2.samples, key=lambda p: abs(p - pitch))
+    info = sf2.samples[closest]
+    start, end = info["start"], info["end"]
+    if end * 2 > sf2._smpl_size:
+        return None
+    # Source samples consumed per output sample (pitch shift and rate change combined)
+    step = 2.0 ** ((pitch - closest) / 12.0) * (info["sample_rate"] or rate) / rate
+    n_out = min(int(MAX_NOTE_SEC * rate), int((end - start - 2) / step))
+    if n_out <= 10:
+        return None
+    n_in = int(n_out * step) + 2          # only read the part of the sample we will use
+    off = sf2._smpl_start + start * 2
+    src = np.frombuffer(sf2.data[off:off + n_in * 2], dtype=np.int16).astype(np.float32)
+    pos = np.arange(n_out, dtype=np.float64) * step
+    i0 = np.minimum(pos.astype(np.int64), len(src) - 2)
+    frac = (pos - i0).astype(np.float32)
+    out = src[i0] + (src[i0 + 1] - src[i0]) * frac          # linear interpolation
+    fade = max(1, int(n_out * FADE_FRAC))
+    out[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+    peak = float(np.max(np.abs(out)))
+    if peak > 0:
+        out *= 18000.0 / peak                  # ~55% of full scale: headroom for chords
+    return np.clip(out, -32767, 32767).astype(np.int16)
 
 
 # ── Public API ────────────────────────────────────────────────────
-def init_fluidsynth(sf2_path: str = None, gain: float = 0.8) -> bool:
-    global FLUID_AVAILABLE, _sf2_reader, _sample_cache
+def init_fluidsynth(sf2_path: str = None) -> bool:
+    """Load a soundfont and pre-render every key. Safe to call from a background thread;
+    the new sounds replace the old ones in one step when ready."""
+    global FLUID_AVAILABLE, _sounds, _pcm
 
     path = sf2_path or SF2_PATH
     if not os.path.exists(path):
@@ -272,45 +255,47 @@ def init_fluidsynth(sf2_path: str = None, gain: float = 0.8) -> bool:
     if sz < 100_000:
         print(f"[SF2] File too small: {os.path.basename(path)} ({sz} bytes) — likely corrupt")
         return False
+    init = pygame.mixer.get_init()
+    if not init:
+        return False
+    rate, _, channels = init
 
     try:
         print(f"[SF2] Loading {os.path.basename(path)} ({sz//1024}KB)...")
         reader = SF2Reader(path)
-        if not reader.samples:
-            print("[SF2] No usable samples — soundfont may be compressed/unsupported")
-            return False
-        _sf2_reader = reader
-        _sample_cache = {}
-        FLUID_AVAILABLE = True
-        print(f"[SF2] Ready")
-        return True
+        try:
+            if not reader.samples:
+                print("[SF2] No usable samples — soundfont may be compressed/unsupported")
+                return False
+            sounds, pcm = {}, {}
+            for p in KEY_RANGE:
+                mono = _render_key(reader, p, rate)
+                if mono is None:
+                    continue
+                pcm[p] = mono
+                arr = np.repeat(mono[:, None], channels, axis=1) if channels > 1 else mono
+                sounds[p] = pygame.sndarray.make_sound(arr)
+        finally:
+            reader.close()
+        _sounds, _pcm = sounds, pcm
+        FLUID_AVAILABLE = bool(sounds)
+        print(f"[SF2] Ready: {len(sounds)} keys pre-rendered")
+        return FLUID_AVAILABLE
     except Exception as e:
         print(f"[SF2] Init error: {e}")
         return False
 
 
-def fluid_note_on(pitch: int, velocity: int, channel: int = 0):
-    if not FLUID_AVAILABLE or _sf2_reader is None:
-        return
-    if pitch not in _sample_cache:
-        _sample_cache[pitch] = _build_sound(_sf2_reader, pitch)
-    snd = _sample_cache[pitch]
-    if snd:
-        snd.set_volume(max(0.0, min(1.0, velocity / 127.0)))
-        snd.play()
+def get_sound(pitch: int) -> Optional[pygame.mixer.Sound]:
+    """Pre-rendered Sound for a key (pitches outside the piano use the nearest key)."""
+    return _sounds.get(min(108, max(21, pitch)))
 
 
-def fluid_note_off(pitch: int, channel: int = 0):
-    pass   # decay handled by envelope
+def get_pcm(pitch: int) -> Optional[np.ndarray]:
+    return _pcm.get(min(108, max(21, pitch)))
 
-def fluid_all_notes_off():
-    try: pygame.mixer.stop()
-    except: pass
-
-def fluid_set_gain(gain: float): pass
 
 def shutdown_fluidsynth():
-    global FLUID_AVAILABLE, _sf2_reader, _sample_cache
+    global FLUID_AVAILABLE, _sounds, _pcm
     FLUID_AVAILABLE = False
-    _sf2_reader = None
-    _sample_cache = {}
+    _sounds, _pcm = {}, {}

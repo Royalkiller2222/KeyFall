@@ -51,7 +51,8 @@ class FreePlay:
         self._tick        = 0.0
         self._octave_shift = 0
         self._sustain      = False
-        self._sustained    = set()
+        self._sustained    = set()  # released while the sustain pedal is down: still ringing
+        self._key_pitch    = {}     # QWERTY key -> pitch it started (octave may change before key-up)
         self._mouse_moved  = False  # track if mouse moved since last click
         self._rebuild()
 
@@ -112,6 +113,7 @@ class FreePlay:
     def handle_event(self, event) -> str:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                self.set_sustain(False)
                 return "back"
             if event.key == pygame.K_F11:
                 return "fullscreen"
@@ -124,24 +126,21 @@ class FreePlay:
                 return None
             # Sustain pedal (space)
             if event.key == pygame.K_SPACE:
-                self._sustain = True
-                self._sustained = set(self._held)
+                self.set_sustain(True)
                 return None
             # Note on from keyboard
             pitch = self._kb_pitch(event.key)
-            if pitch and pitch not in self._held:
-                self._held.add(pitch)
-                self._flashes[pitch] = 0.4
-                self.audio.play_note(pitch, 90)
+            if pitch and event.key not in self._key_pitch:
+                self._key_pitch[event.key] = pitch
+                self.press(pitch, 90)
 
         elif event.type == pygame.KEYUP:
             if event.key == pygame.K_SPACE:
-                self._sustain = False
-                self._sustained.clear()
+                self.set_sustain(False)
                 return None
-            pitch = self._kb_pitch(event.key)
+            pitch = self._key_pitch.pop(event.key, None)   # the pitch this key started
             if pitch:
-                self._held.discard(pitch)
+                self.release(pitch)
 
         elif event.type == pygame.MOUSEMOTION:
             # Mouse moved — always show cursor
@@ -149,32 +148,48 @@ class FreePlay:
             if self._mouse_pitch is not None:
                 new_pitch = self._pitch_at(event.pos)
                 if new_pitch != self._mouse_pitch:
-                    # Release old key
-                    self._held.discard(self._mouse_pitch)
-                    # Trigger new key if dragged onto one
+                    # Release old key, trigger the new one if dragged onto one
+                    self.release(self._mouse_pitch)
+                    self._mouse_pitch = new_pitch
                     if new_pitch is not None:
-                        self._mouse_pitch = new_pitch
-                        self._held.add(new_pitch)
-                        self._flashes[new_pitch] = 0.3
-                        self.audio.play_note(new_pitch, 80)
-                    else:
-                        self._mouse_pitch = None
+                        self.press(new_pitch, 80, flash=0.3)
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pitch = self._pitch_at(event.pos)
             if pitch is not None:
                 self._mouse_pitch = pitch
-                self._held.add(pitch)
-                self._flashes[pitch] = 0.4
-                self.audio.play_note(pitch, 90)
+                self.press(pitch, 90)
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             # Always release mouse pitch on mouse up, regardless of position
             if self._mouse_pitch is not None:
-                self._held.discard(self._mouse_pitch)
+                self.release(self._mouse_pitch)
                 self._mouse_pitch = None
 
         return None
+
+    # ── Key state (QWERTY, mouse and MIDI all go through these) ────
+    def press(self, pitch, velocity, flash=0.4, sound=True):
+        self._held.add(pitch)
+        self._sustained.discard(pitch)
+        self._flashes[pitch] = flash
+        if sound:
+            self.audio.note_on(pitch, velocity)
+
+    def release(self, pitch, sound=True):
+        self._held.discard(pitch)
+        if self._sustain:
+            self._sustained.add(pitch)   # stays lit (and ringing) until the pedal is released
+        if sound:
+            self.audio.note_off(pitch)
+
+    def set_sustain(self, down, sound=True):
+        """Space bar or the MIDI sustain pedal."""
+        self._sustain = down
+        if not down:
+            self._sustained.clear()
+        if sound:
+            self.audio.set_sustain(down)
 
     def _kb_pitch(self, key):
         base = self.KB_MAP.get(key)
