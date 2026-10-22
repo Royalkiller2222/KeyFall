@@ -14,14 +14,20 @@ Expected structure:
       hard.mid
     # Legacy: flat .mid files still work too
     old_song.mid
+
+Parsed songs are cached in cache/songs/ (keyed by file size + modification time), so a
+big MIDI is only parsed once instead of on every launch and every Refresh.
 """
 
+import hashlib
 import os
 import json
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
-from game.midi_handler import MidiParser, SongData, create_demo_song
-from game.constants import SONGS_DIR, MODE_EASY, MODE_HARD, MODE_TESTING
+from typing import Callable, List, Optional, Dict
+from game.midi_handler import MidiParser, MidiNote, SongData, create_demo_song, PARSER_VERSION
+from game.constants import BASE_DIR, SONGS_DIR, MODE_EASY, MODE_HARD, MODE_TESTING
+
+CACHE_DIR = os.path.join(BASE_DIR, "cache", "songs")
 
 DIFFICULTY_FILES = {
     "EASY":    ["easy.mid",    "easy.midi"],
@@ -75,6 +81,50 @@ class SongEntry:
         return None
 
 
+# ── Parse cache ───────────────────────────────────────────────────
+def _cache_path(path: str) -> str:
+    digest = hashlib.sha1(os.path.abspath(path).lower().encode("utf-8")).hexdigest()[:16]
+    return os.path.join(CACHE_DIR, digest + ".json")
+
+
+def load_song(path: str) -> Optional[SongData]:
+    """Parse a MIDI file, reusing the cached result while the file is unchanged."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = {"v": PARSER_VERSION, "size": st.st_size, "mtime": st.st_mtime_ns}
+    cache = _cache_path(path)
+    try:
+        with open(cache, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("key") == key:
+            notes = [MidiNote(p, t, d, v, tr) for p, t, d, v, tr in data["notes"]]
+            song = SongData(title=os.path.splitext(os.path.basename(path))[0], filename=path,
+                            notes=notes, bpm=data["bpm"])
+            if notes:
+                song.duration_sec = max(n.time_sec + n.duration_sec for n in notes)
+                song.min_pitch = min(n.pitch for n in notes)
+                song.max_pitch = max(n.pitch for n in notes)
+            return song
+    except (OSError, ValueError, KeyError, TypeError):
+        pass   # missing, stale or unreadable cache: parse the file
+    song = MidiParser.parse(path)
+    if song and song.notes:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            tmp = cache + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"key": key, "bpm": song.bpm,
+                           "notes": [[n.pitch, round(n.time_sec, 5), round(n.duration_sec, 5),
+                                      n.velocity, n.track] for n in song.notes]},
+                          f, separators=(",", ":"))
+            os.replace(tmp, cache)
+        except OSError:
+            pass   # read-only install folder: just parse again next time
+    return song
+
+
 def _parse_info(folder: str) -> Dict[str, str]:
     """Parse optional info.txt in song folder."""
     info_path = os.path.join(folder, "info.txt")
@@ -92,21 +142,22 @@ def _parse_info(folder: str) -> Dict[str, str]:
     return result
 
 
-def scan_songs_library() -> List[SongEntry]:
+def scan_songs_library(progress: Optional[Callable[[int, int, str], None]] = None) -> List[SongEntry]:
     """
     Scan the songs/ directory and return SongEntry list.
     Supports both flat .mid files and subfolder-based organisation.
+    progress(done, total, name) is called before each item (e.g. to draw a loading screen).
     """
     entries: List[SongEntry] = []
 
     if not os.path.isdir(SONGS_DIR):
         os.makedirs(SONGS_DIR, exist_ok=True)
 
-    items = sorted(os.listdir(SONGS_DIR))
+    items = [i for i in sorted(os.listdir(SONGS_DIR)) if not i.startswith("_")]  # skip system folders
 
-    for item in items:
-        # Skip reserved system folders
-        if item.startswith("_"): continue
+    for n_done, item in enumerate(items):
+        if progress:
+            progress(n_done, len(items), item)
         item_path = os.path.join(SONGS_DIR, item)
 
         # ── Subfolder with difficulty variants ──────────────────────
@@ -119,7 +170,7 @@ def scan_songs_library() -> List[SongEntry]:
                 for fname in filenames:
                     fpath = os.path.join(item_path, fname)
                     if os.path.exists(fpath):
-                        song = MidiParser.parse(fpath)
+                        song = load_song(fpath)
                         if song and song.notes:
                             song.title = item
                             difficulties[diff] = song
@@ -133,7 +184,7 @@ def scan_songs_library() -> List[SongEntry]:
                     for fname in sorted(os.listdir(diff_subfolder)):
                         if fname.lower().endswith((".mid", ".midi")):
                             fpath = os.path.join(diff_subfolder, fname)
-                            song = MidiParser.parse(fpath)
+                            song = load_song(fpath)
                             if song and song.notes:
                                 song.title = item
                                 difficulties[diff] = song
@@ -145,7 +196,7 @@ def scan_songs_library() -> List[SongEntry]:
                 for fname in os.listdir(item_path):
                     if fname.lower().endswith((".mid", ".midi")):
                         fpath = os.path.join(item_path, fname)
-                        song = MidiParser.parse(fpath)
+                        song = load_song(fpath)
                         if song and song.notes:
                             song.title = item
                             difficulties["MEDIUM"] = song
@@ -164,7 +215,7 @@ def scan_songs_library() -> List[SongEntry]:
 
         # ── Flat .mid file (legacy) ──────────────────────────────────
         elif item.lower().endswith((".mid", ".midi")):
-            song = MidiParser.parse(item_path)
+            song = load_song(item_path)
             if song and song.notes:
                 title = os.path.splitext(item)[0]
                 song.title = title

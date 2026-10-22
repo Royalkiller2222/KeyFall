@@ -171,7 +171,22 @@ class App:
     def _H(self): return self.screen.get_height()
 
     def _load_songs(self):
-        return scan_songs_library()
+        return scan_songs_library(progress=self._draw_loading)
+
+    def _draw_loading(self, done, total, name):
+        """Shown while songs are scanned; new or changed MIDIs are parsed (then cached)."""
+        pygame.event.pump()   # keeps Windows from marking the window "Not Responding"
+        W, H = self.screen.get_size()
+        self.screen.fill(DARK_BG)
+        title = sys_font("consolas", 34, bold=True).render("Loading songs...", True, NEON_CYAN)
+        self.screen.blit(title, (W//2 - title.get_width()//2, H//2 - 50))
+        sub = sys_font("consolas", 16).render(f"{done + 1}/{total}  {name[:60]}", True, GRAY)
+        self.screen.blit(sub, (W//2 - sub.get_width()//2, H//2 + 4))
+        bw = int(W * 0.4); x = W//2 - bw//2; y = H//2 + 34
+        pygame.draw.rect(self.screen, (20,20,35), (x, y, bw, 8), border_radius=4)
+        pygame.draw.rect(self.screen, NEON_CYAN, (x, y, int(bw * (done + 1) / max(1, total)), 8),
+                         border_radius=4)
+        pygame.display.flip()
 
     def _refresh_songs(self):
         """Reload song library and update song select menu."""

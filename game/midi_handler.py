@@ -3,10 +3,12 @@ KeyFall - MIDI Handler
 Parses MIDI files and handles live piano input
 """
 
+import bisect
 import os
 import queue
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Optional, Callable
 
@@ -66,6 +68,12 @@ class SongData:
                 if n.time_sec <= current_sec <= n.time_sec + n.duration_sec]
 
 
+PIANO_LOW, PIANO_HIGH = 21, 108   # notes outside an 88-key piano are skipped
+MERGE_WINDOW_SEC = 0.03           # the same key struck twice this close together = one press
+MIN_NOTE_SEC = 0.05
+PARSER_VERSION = 2                # bump when parsing changes (invalidates the song cache)
+
+
 class MidiParser:
     """Parses MIDI files into SongData."""
 
@@ -74,7 +82,7 @@ class MidiParser:
         if mido is None:
             print("[MIDI] Cannot parse: mido not installed")
             return None
-        
+
         if not os.path.exists(filepath):
             print(f"[MIDI] File not found: {filepath}")
             return None
@@ -83,50 +91,78 @@ class MidiParser:
             mid = mido.MidiFile(filepath)
             title = os.path.splitext(os.path.basename(filepath))[0]
             song = SongData(title=title, filename=filepath)
+            tpb = mid.ticks_per_beat
 
-            # Get tempo (default 500000 = 120 BPM)
-            tempo = 500000
+            # Tempo map from every track (the old parser used one tempo for the whole
+            # song, so any file with tempo changes drifted out of sync)
+            changes = []
             for track in mid.tracks:
+                tick = 0
                 for msg in track:
+                    tick += msg.time
                     if msg.type == 'set_tempo':
-                        tempo = msg.tempo
-                        break
+                        changes.append((tick, msg.tempo))
+            changes.sort(key=lambda c: c[0])
+            seg_ticks, seg_secs, seg_tempos = [0], [0.0], [500000]   # default 120 BPM
+            for tick, tempo in changes:
+                if tick == seg_ticks[-1]:
+                    seg_tempos[-1] = tempo
+                    continue
+                seg_secs.append(seg_secs[-1] + (tick - seg_ticks[-1]) * seg_tempos[-1] / (tpb * 1e6))
+                seg_ticks.append(tick)
+                seg_tempos.append(tempo)
+            song.bpm = mido.tempo2bpm(seg_tempos[0])
 
-            song.bpm = mido.tempo2bpm(tempo)
-            ticks_per_beat = mid.ticks_per_beat
+            def ticks_to_sec(tick):
+                k = bisect.bisect_right(seg_ticks, tick) - 1
+                return seg_secs[k] + (tick - seg_ticks[k]) * seg_tempos[k] / (tpb * 1e6)
 
-            def ticks_to_sec(ticks):
-                return mido.tick2second(ticks, ticks_per_beat, tempo)
-
-            # Parse all tracks
-            notes = []
+            # Pair note-on/off per (channel, pitch), first struck = first released. The old
+            # parser keyed by pitch only, so re-striking a key before its note-off overwrote
+            # the earlier note (15% of one song's notes were lost this way).
+            raw = []   # (pitch, start_tick, end_tick, velocity, track)
             for track_idx, track in enumerate(mid.tracks):
-                current_time_ticks = 0
-                active = {}  # pitch -> (start_ticks, velocity)
-                
+                tick = 0
+                held = {}
                 for msg in track:
-                    current_time_ticks += msg.time
-                    
+                    tick += msg.time
+                    if msg.type not in ('note_on', 'note_off') or msg.channel == 9:
+                        continue   # MIDI channel 10 is percussion, not piano
+                    key = (msg.channel, msg.note)
                     if msg.type == 'note_on' and msg.velocity > 0:
-                        active[msg.note] = (current_time_ticks, msg.velocity)
-                    
-                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                        if msg.note in active:
-                            start_ticks, vel = active.pop(msg.note)
-                            start_sec = ticks_to_sec(start_ticks)
-                            end_sec = ticks_to_sec(current_time_ticks)
-                            duration = max(0.05, end_sec - start_sec)
-                            
-                            notes.append(MidiNote(
-                                pitch=msg.note,
-                                time_sec=start_sec,
-                                duration_sec=duration,
-                                velocity=vel,
-                                track=track_idx
-                            ))
+                        held.setdefault(key, deque()).append((tick, msg.velocity))
+                    elif held.get(key):
+                        start, vel = held[key].popleft()
+                        raw.append((msg.note, start, tick, vel, track_idx))
+                for (_, pitch), starts in held.items():   # never released: end with the track
+                    for start, vel in starts:
+                        raw.append((pitch, start, tick, vel, track_idx))
+
+            # One key can only sound once at a time: merge doubled parts (same key within
+            # 30 ms) and let a re-strike end the previous note.
+            by_pitch = {}
+            for pitch, start, end, vel, track_idx in raw:
+                if PIANO_LOW <= pitch <= PIANO_HIGH:
+                    by_pitch.setdefault(pitch, []).append(
+                        [ticks_to_sec(start), ticks_to_sec(end), vel, track_idx])
+            notes = []
+            for pitch, spans in by_pitch.items():
+                spans.sort()
+                merged = []
+                for s, e, vel, track_idx in spans:
+                    if merged and s - merged[-1][0] < MERGE_WINDOW_SEC:
+                        merged[-1][1] = max(merged[-1][1], e)
+                        merged[-1][2] = max(merged[-1][2], vel)
+                        continue
+                    if merged and merged[-1][1] > s:
+                        merged[-1][1] = s
+                    merged.append([s, e, vel, track_idx])
+                notes.extend(MidiNote(pitch=pitch, time_sec=s, duration_sec=max(MIN_NOTE_SEC, e - s),
+                                      velocity=vel, track=track_idx)
+                             for s, e, vel, track_idx in merged)
 
             # Sort by time
-            notes.sort(key=lambda n: n.time_sec)
+            notes.sort(key=lambda n: (n.time_sec, n.pitch))
             song.notes = notes
 
             if notes:

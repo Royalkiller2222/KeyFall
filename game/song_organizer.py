@@ -15,8 +15,7 @@ organizes them into a proper folder structure:
 import os
 import shutil
 
-
-SONGS_DIR = "songs"
+from game.constants import SONGS_DIR   # absolute: doesn't depend on the working directory
 DIFFICULTIES = ["easy", "medium", "hard", "extreme"]
 
 
