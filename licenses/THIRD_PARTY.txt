@@ -1,0 +1,25 @@
+KeyFall - third-party components shipped with the game
+=======================================================
+
+FluidSynth 2.6.2 (lib/fluidsynth/libfluidsynth-3.dll)
+  Software synthesizer that plays the soundfonts.
+  License: GNU Lesser General Public License 2.1 (FluidSynth-LGPL-2.1.txt in this folder)
+  Source:  https://github.com/FluidSynth/fluidsynth/tree/v2.6.2
+  The DLLs are the unmodified official Windows build:
+  https://github.com/FluidSynth/fluidsynth/releases/tag/v2.6.2
+  KeyFall loads the DLL at runtime; you may replace lib/fluidsynth/*.dll with your own
+  compatible build of FluidSynth.
+
+libsndfile (lib/fluidsynth/sndfile.dll)
+  Used by FluidSynth to read compressed (SF3) soundfonts.
+  License: GNU Lesser General Public License 2.1 (same text as above)
+  Source:  https://github.com/libsndfile/libsndfile
+
+SDL 3 (lib/fluidsynth/SDL3.dll)
+  Used by FluidSynth as a fallback audio output.
+  License: zlib license - https://github.com/libsdl-org/SDL/blob/main/LICENSE.txt
+  Source:  https://github.com/libsdl-org/SDL
+
+YDP Grand Piano soundfont (fluidsynth/pianos/piano.sf2)
+  FreePats project, Creative Commons Attribution 3.0.
+  https://freepats.zenvoid.org/Piano/

@@ -24,11 +24,12 @@ ROOT = Path(__file__).resolve().parent
 BUILD = ROOT / "build"
 STAGE = BUILD / "KeyFall"
 DIST = ROOT / "dist"
-DATA_DIRS = ("songs", "fluidsynth", "sfx")
+DATA_DIRS = ("songs", "fluidsynth", "sfx", "lib", "licenses")
 NOT_SHIPPED = (".setup_done", "_piano.*", "__pycache__", "*.pyc")
 RUNTIME_FILES = ("keyfall_crash.txt", "keyfall_selftest.txt", "savegame.json", "cache")
 BUILD_INFO = ROOT / "game" / "_build_info.py"
 PIANO = ROOT / "fluidsynth" / "pianos" / "piano.sf2"
+FLUIDSYNTH_STAMP = ROOT / "lib" / "fluidsynth" / "VERSION.txt"
 
 
 def log(msg):
@@ -97,7 +98,7 @@ def clean_runtime_files(app_dir):
 def selftest(app_dir, timeout=300):
     """Run the built EXE headless through the scripted smoke test (game/selftest.py)."""
     clean_runtime_files(app_dir)
-    env = dict(os.environ, KEYFALL_SELFTEST="1", KEYFALL_NO_MIDI="1",
+    env = dict(os.environ, KEYFALL_SELFTEST="1", KEYFALL_NO_MIDI="1", KEYFALL_EXPECT_FLUIDSYNTH="1",
                SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
     log("running self-test on the built EXE (headless, ~1 minute)...")
     started = time.time()
@@ -141,6 +142,8 @@ def main():
 
     if not PIANO.exists():
         sys.exit("[build] fluidsynth/pianos/piano.sf2 is missing - run setup_audio.py first.")
+    if not FLUIDSYNTH_STAMP.exists():
+        sys.exit("[build] FluidSynth (lib/fluidsynth) is missing - run setup_audio.py first.")
     version = args.version or default_version()
     log(f"building KeyFall {version} with Python {sys.version.split()[0]}")
     run_pyinstaller(version)

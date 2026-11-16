@@ -64,7 +64,8 @@ class SelfTest:
             (1.0, "open song select",           lambda: _keys(K.K_RETURN),           at(STATE_SONG_SELECT)),
             (0.5, "select densest song",        self._select_densest,                self._on_target_song),
             (7.0, "song plays (autoplay)",      lambda: _keys(K.K_RETURN),           self._song_advanced),
-            (0.5, "pause menu",                 lambda: _keys(K.K_ESCAPE),           at(STATE_PAUSE_MENU)),
+            (0.0, "notes sound (audio engine)", None,                                self._notes_sounding),
+            (0.5, "pause menu",                lambda: _keys(K.K_ESCAPE),           at(STATE_PAUSE_MENU)),
             (0.5, "settings from pause",        lambda: _keys(K.K_DOWN, K.K_DOWN, K.K_RETURN), at(STATE_SETTINGS)),
             (0.5, "mouse wheel in settings",    _wheel,                              at(STATE_SETTINGS)),
             (0.5, "back to pause menu",         lambda: _keys(K.K_ESCAPE),           at(STATE_PAUSE_MENU)),
@@ -124,6 +125,17 @@ class SelfTest:
                              f"t={a.engine.current_time:.1f}s, {a.clock.get_fps():.0f} FPS, "
                              f"{a.engine.stats.hit_count} hits")
         return ok
+
+    def _notes_sounding(self):
+        """Autoplay is mid-song, so voices must be sounding. Release builds bundle FluidSynth
+        (KEYFALL_EXPECT_FLUIDSYNTH=1), so there it must be the engine playing them."""
+        audio = self.app.audio
+        voices = audio.active_voices()
+        self.info.append(f"audio: {audio.backend} engine, {voices} voices sounding, "
+                         f"{audio.soundfont_status()}")
+        if os.environ.get("KEYFALL_EXPECT_FLUIDSYNTH") == "1" and audio.backend != "fluidsynth":
+            return False
+        return voices > 0
 
     def _midi(self, kind, velocity):
         """Feed a message through the same entry point the MIDI backend calls."""

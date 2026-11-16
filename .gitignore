@@ -17,3 +17,6 @@ fluidsynth/.setup_done
 
 # Over GitHub's 100 MB file limit — downloaded by setup_audio.py
 fluidsynth/pianos/piano.sf2
+
+# FluidSynth DLLs — downloaded (and checksum-verified) by setup_audio.py
+lib/

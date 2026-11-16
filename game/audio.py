@@ -2,7 +2,8 @@
 KeyFall - Audio Engine
 Piano notes (soundfont or synthesized), MIDI output routing, menu music and SFX.
 
-Notes play on their own pool of mixer channels, handed out least-recently-used, so a dense
+Soundfont notes play through real FluidSynth (game/fluidsynth_native.py) when its DLLs are
+installed. Without them, the built-in sample player below is used: notes play on their own pool of mixer channels, handed out least-recently-used, so a dense
 passage takes over the oldest voice instead of silently dropping the new note (the old
 32-channel setup dropped 16 of 48 simultaneous notes). SFX and music use the remaining
 channels. A released key fades out (or keeps ringing while the sustain pedal is down) and
@@ -35,6 +36,13 @@ try:
 except Exception:
     _fluid_eng = None
     FLUID_ENGINE_AVAILABLE = False
+
+from game import fluidsynth_native as _fsn
+
+# Selftest/CI machines have no sound card: FluidSynth then runs without an audio driver
+_HEADLESS_AUDIO = os.environ.get("SDL_AUDIODRIVER") == "dummy"
+FS_GAIN = 0.9               # FluidSynth gain at full note + master volume (~the old engine's level)
+FS_RENDER_GAIN = 0.25       # offline menu-music render (normalized afterwards)
 
 NOTE_VOICES = 88            # mixer channels reserved for piano notes
 FX_CHANNELS = 16            # channels left for SFX and menu music
@@ -291,6 +299,11 @@ class AudioManager:
         self._recent = deque()        # start times of recent notes (dense-passage gain)
         self._midi_offs = []          # heap of (due time, pitch) for MIDI-out one-shots
 
+        # FluidSynth (when installed): one live synth, swapped when the soundfont changes
+        self._fs: Optional[_fsn.Synth] = None
+        self._fs_offs = []            # heap of (due time, channel, pitch, token) one-shot ends
+        self._fs_tokens: Dict[tuple, int] = {}   # (channel, pitch) -> latest note-on
+
         # Instrument loading (background thread)
         self._fluid_ready: bool = False
         self._loading: bool = False
@@ -477,16 +490,44 @@ class AudioManager:
         self._loading = True
         threading.Thread(target=self._load_worker, args=(self._load_gen,), daemon=True).start()
 
+    def _open_fluidsynth(self, path: str) -> Optional["_fsn.Synth"]:
+        if not _fsn.available():
+            print(f"[Audio] {_fsn.load_error()} - using the built-in sample player")
+            return None
+        try:
+            return _fsn.Synth(path, audio=not _HEADLESS_AUDIO, gain=self._fs_gain())
+        except Exception as e:
+            print(f"[Audio] FluidSynth failed ({e}) - using the built-in sample player")
+            return None
+
+    def _set_fs(self, syn: Optional["_fsn.Synth"]):
+        """Swap the live synth. Note calls hold self._lock, so the old one is never in use
+        while it is closed."""
+        with self._lock:
+            old, self._fs = self._fs, syn
+            self._fs_offs = []
+            self._fs_tokens.clear()
+            if old is not None:
+                old.close()
+
     def _load_worker(self, gen: int):
         try:
             ready = False
+            syn = None
             if FLUID_ENGINE_AVAILABLE and self._mixer_ok:
                 path = self._resolve_sf2()
                 if path:
                     self._music_status = f"Loading {os.path.basename(path)}..."
-                    ready = _fluid_eng.init_fluidsynth(path)
+                    syn = self._open_fluidsynth(path)
+                    # the sample player is only needed when FluidSynth is not
+                    ready = syn is not None or _fluid_eng.init_fluidsynth(path)
             if gen != self._load_gen:
+                if syn is not None:
+                    syn.close()
                 return
+            self._set_fs(syn)
+            if syn is not None:
+                _fluid_eng.shutdown_fluidsynth()     # free the sample player's renders
             self._fluid_ready = ready
             if self._mixer_ok and (self.note_sound_mode == "synth" or not ready):
                 self._music_status = "Preparing piano tones..."
@@ -533,12 +574,32 @@ class AudioManager:
             return self._tone_pcm.get(pitch)
         return None
 
+    @property
+    def backend(self) -> str:
+        """Which engine plays notes: fluidsynth, sampler, synth or midi_out."""
+        if self._midi_out_active():
+            return "midi_out"
+        if self._use_fs():
+            return "fluidsynth"
+        if self.note_sound_mode != "synth" and self._fluid_ready:
+            return "sampler"
+        return "synth"
+
+    def active_voices(self) -> int:
+        """Notes currently sounding (FluidSynth voices, or busy mixer voices)."""
+        with self._lock:
+            if self._use_fs():
+                return self._fs.active_voices()
+        return sum(1 for ch in self._voices if ch.get_busy())
+
     def soundfont_status(self) -> str:
         """Human-readable soundfont status string for UI."""
         if not FLUID_ENGINE_AVAILABLE:
             return "Module unavailable"
         if self._loading:
             return "Loading..."
+        if self._fs is not None:
+            return f"Ready ({os.path.basename(_fluid_eng.SF2_PATH)}, FluidSynth)"
         if self._fluid_ready:
             return f"Ready ({os.path.basename(_fluid_eng.SF2_PATH)})"
         path = _fluid_eng.resolve_sf2_path(self.sf2_entry)
@@ -554,6 +615,19 @@ class AudioManager:
         return self._music_status
 
     # ── Notes ─────────────────────────────────────────────────────
+    def _use_fs(self) -> bool:
+        return self._fs is not None and self.note_sound_mode == "soundfont"
+
+    def _fs_gain(self) -> float:
+        return FS_GAIN * self.note_volume * self.master_volume
+
+    def _fs_noteon(self, chan: int, pitch: int, velocity: int) -> int:
+        """Start a FluidSynth note (caller holds self._lock). Returns its token."""
+        token = self._fs_tokens.get((chan, pitch), 0) + 1
+        self._fs_tokens[(chan, pitch)] = token
+        self._fs.noteon(chan, pitch, velocity)
+        return token
+
     def _start_voice(self, pitch: int, velocity: int, volume_scale: float, held: bool):
         snd = self._note_sound(pitch)
         if snd is None or not self._voices:
@@ -587,6 +661,10 @@ class AudioManager:
         if self._midi_out_active():
             self._midi_send('note_on', note=pitch, velocity=self._out_velocity(velocity))
             return
+        with self._lock:
+            if self._use_fs():
+                self._fs_noteon(_fsn.PLAYER_CHAN, pitch, velocity)
+                return
         self._start_voice(pitch, velocity, volume_scale, held=True)
 
     def note_off(self, pitch: int):
@@ -595,6 +673,9 @@ class AudioManager:
             self._midi_send('note_off', note=pitch, velocity=0)
             return
         with self._lock:
+            if self._use_fs():           # FluidSynth keeps it ringing while the pedal is down
+                self._fs.noteoff(_fsn.PLAYER_CHAN, pitch)
+                return
             if self.sustain:
                 if pitch in self._held:
                     self._sustained.add(pitch)
@@ -613,6 +694,9 @@ class AudioManager:
             return
         with self._lock:
             self.sustain = down
+            if self._use_fs():
+                self._fs.cc(_fsn.PLAYER_CHAN, 64, 127 if down else 0)
+                return
             if not down:
                 for p in list(self._sustained):
                     self._release(p)
@@ -626,6 +710,16 @@ class AudioManager:
             with self._lock:
                 heapq.heappush(self._midi_offs, (time.perf_counter() + max(0.1, duration or 1.0), pitch))
             return
+        with self._lock:
+            if self._use_fs():
+                # FluidSynth notes ring until note-off (strings/pads never stop): schedule it
+                chan = _fsn.AUTO_CHAN if volume_scale >= 0.999 else _fsn.QUIET_CHAN
+                if chan == _fsn.QUIET_CHAN:   # CC7 is a squared curve: sqrt gives a linear scale
+                    self._fs.cc(chan, 7, round(127 * math.sqrt(max(0.0, volume_scale))))
+                token = self._fs_noteon(chan, pitch, velocity)
+                heapq.heappush(self._fs_offs, (time.perf_counter() + max(0.1, duration or 1.0),
+                                               chan, pitch, token))
+                return
         self._start_voice(pitch, velocity, volume_scale, held=False)
 
     def all_notes_off(self, fade_ms: int = 150):
@@ -637,13 +731,24 @@ class AudioManager:
             self._sustained.clear()
             self.sustain = False
             pending, self._midi_offs = self._midi_offs, []
+            self._fs_offs = []
+            if self._fs is not None:
+                self._fs.all_notes_off(immediate=fade_ms <= 0)
         if self.midi_out_port:
             for _, pitch in pending:
                 self._midi_send('note_off', note=pitch, velocity=0)
             self._midi_send('control_change', control=123, value=0)
 
     def update(self):
-        """Per-frame housekeeping (main thread): due MIDI-out note-offs."""
+        """Per-frame housekeeping (main thread): due one-shot note-offs."""
+        if self._fs_offs:
+            now = time.perf_counter()
+            with self._lock:
+                while self._fs_offs and self._fs_offs[0][0] <= now:
+                    _, chan, pitch, token = heapq.heappop(self._fs_offs)
+                    # skip if the key was struck again since: that newer note owns it
+                    if self._fs is not None and self._fs_tokens.get((chan, pitch)) == token:
+                        self._fs.noteoff(chan, pitch)
         if not self._midi_offs:
             return
         now = time.perf_counter()
@@ -674,7 +779,10 @@ class AudioManager:
             from game.midi_handler import MidiParser
             song = MidiParser.parse(path)
             if song and song.notes:
-                arr = self._render_song(song)
+                if self._fs is not None and self.note_sound_mode == "soundfont":
+                    arr = self._render_song_fs(song, gen)
+                if arr is None and gen == self._load_gen:
+                    arr = self._render_song(song)
         if arr is None:
             self._music_status = "Generating music..."
             arr = generate_menu_music(32.0, self._rate)
@@ -683,6 +791,30 @@ class AudioManager:
         self._menu_music = pygame.sndarray.make_sound(arr)
         print("[Audio] Menu music ready.")
         self._do_start_music()
+
+    def _render_song_fs(self, song, gen: int) -> Optional[np.ndarray]:
+        """Menu music rendered offline by FluidSynth, normalized like _render_song."""
+        try:
+            arr = _fsn.render_song(_fluid_eng.SF2_PATH, song, self._rate, gain=FS_RENDER_GAIN,
+                                   cancelled=lambda: gen != self._load_gen)
+        except Exception as e:
+            print(f"[Audio] FluidSynth menu-music render failed: {e}")
+            return None
+        if arr is None:
+            return None
+        out = arr.astype(np.float32)
+        peak = float(np.max(np.abs(out)))
+        if peak <= 0:
+            return None
+        out *= 0.72 * 32767.0 / peak
+        fade = min(len(out) // 4, int(self._rate * 1.5))
+        ramp = np.linspace(0, 1, fade, dtype=np.float32)[:, None]
+        out[:fade] *= ramp
+        out[-fade:] *= ramp[::-1]
+        out = out.astype(np.int16)
+        if pygame.mixer.get_init()[2] == 2:
+            return out
+        return out.mean(axis=1).astype(np.int16)
 
     def _render_song(self, song, max_sec: float = 300.0) -> Optional[np.ndarray]:
         """Mix a parsed song from the per-key samples (each key is rendered once, not per note)."""
@@ -764,6 +896,9 @@ class AudioManager:
                 pass
         if self._streaming and self._mixer_ok:
             pygame.mixer.music.set_volume(sfx_vol)
+        with self._lock:
+            if self._fs is not None:
+                self._fs.set_gain(self._fs_gain())
 
     def apply_settings(self, settings: dict):
         """Apply saved settings. Reloads the instrument only when the soundfont changed
@@ -796,6 +931,8 @@ class AudioManager:
     def shutdown(self):
         self.all_notes_off(0)
         self._disconnect_midi_out()
+        self._load_gen += 1            # a load still running must not install a new synth
+        self._set_fs(None)
         if FLUID_ENGINE_AVAILABLE:
             try: _fluid_eng.shutdown_fluidsynth()
             except Exception: pass

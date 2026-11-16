@@ -50,9 +50,10 @@ REM Download soundfont only if missing
 set RUN_SETUP=0
 if not exist "fluidsynth\.setup_done" set RUN_SETUP=1
 if not exist "fluidsynth\pianos\piano.sf2" set RUN_SETUP=1
+if not exist "lib\fluidsynth\VERSION.txt" set RUN_SETUP=1
 
 if "%RUN_SETUP%"=="1" (
-    echo  Downloading soundfont ^(first run only^)...
+    echo  Downloading soundfont and FluidSynth ^(first run only^)...
     %PYEXE% setup_audio.py
     echo.
 )

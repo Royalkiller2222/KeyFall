@@ -11,6 +11,7 @@ on:
       - "songs/**"
       - "sfx/**"
       - "fluidsynth/**"
+      - "licenses/**"
       - "build_release.py"
       - "setup_audio.py"
       - "requirements*.txt"
@@ -55,8 +56,16 @@ jobs:
           path: fluidsynth/pianos/piano.sf2
           key: ydp-grand-piano-sf2-20160804
 
-      - name: Download piano soundfont
-        if: steps.piano.outputs.cache-hit != 'true'
+      # FluidSynth DLLs: pinned release + SHA-256 in setup_audio.py, so the key follows that file
+      - name: Restore FluidSynth
+        id: fluidsynth
+        uses: actions/cache@v6
+        with:
+          path: lib/fluidsynth
+          key: fluidsynth-${{ hashFiles('setup_audio.py') }}
+
+      - name: Download piano soundfont and FluidSynth
+        if: steps.piano.outputs.cache-hit != 'true' || steps.fluidsynth.outputs.cache-hit != 'true'
         shell: bash
         run: |
           for attempt in 1 2 3; do
@@ -64,6 +73,7 @@ jobs:
             echo "download attempt $attempt failed"; sleep 30
           done
           test -f fluidsynth/pianos/piano.sf2
+          test -f lib/fluidsynth/VERSION.txt
 
       - name: Build, zip and self-test
         shell: bash

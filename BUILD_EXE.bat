@@ -26,7 +26,10 @@ echo  Installing build tools...
 %PYEXE% -m pip install --user -q -r requirements-build.txt --disable-pip-version-check
 if errorlevel 1 ( echo  Could not install build tools. & pause & exit /b 1 )
 
-if not exist "fluidsynth\pianos\piano.sf2" %PYEXE% setup_audio.py
+set RUN_SETUP=0
+if not exist "fluidsynth\pianos\piano.sf2" set RUN_SETUP=1
+if not exist "lib\fluidsynth\VERSION.txt" set RUN_SETUP=1
+if "%RUN_SETUP%"=="1" %PYEXE% setup_audio.py
 
 echo  Building (2-5 minutes)...
 echo.

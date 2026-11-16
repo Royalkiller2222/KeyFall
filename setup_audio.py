@@ -1,9 +1,10 @@
 """
 KeyFall - First-run audio setup
-Downloads the YDP Grand Piano soundfont (Yamaha Disklavier, FreePats project).
+Downloads the YDP Grand Piano soundfont (Yamaha Disklavier, FreePats project) and the
+FluidSynth synthesizer DLLs (official Windows release, checked against a pinned SHA-256).
 """
 
-import os, sys, urllib.request, tarfile, shutil
+import hashlib, os, sys, urllib.request, tarfile, shutil, zipfile
 
 import sys as _sys
 if getattr(_sys, "frozen", False):
@@ -18,6 +19,16 @@ DONE    = os.path.join(FDIR, ".setup_done")
 # CC Attribution 3.0, FreePats project
 YDP_URL  = "https://freepats.zenvoid.org/Piano/YDP-GrandPiano/YDP-GrandPiano-SF2-20160804.tar.bz2"
 YDP_NAME = "YDP Grand Piano (Yamaha Disklavier)"
+
+# FluidSynth: official GitHub release, pinned by version and SHA-256 of the zip.
+# LGPL-2.1 (see licenses/). Only the DLLs the game loads are extracted.
+FS_VERSION = "2.6.2"
+FS_URL = (f"https://github.com/FluidSynth/fluidsynth/releases/download/v{FS_VERSION}/"
+          f"fluidsynth-v{FS_VERSION}-win10-x64-cpp11.zip")
+FS_SHA256 = "808295345d43c9c428f3fa87d29fbf97a9926f356df95559ff2689f3bd4072d7"
+FS_DLLS = ("libfluidsynth-3.dll", "sndfile.dll", "SDL3.dll")
+FS_DIR = os.path.join(BASE, "lib", "fluidsynth")
+FS_STAMP = os.path.join(FS_DIR, "VERSION.txt")
 
 
 def is_valid_sf2(path):
@@ -52,6 +63,53 @@ def download(url, dest, label):
     except Exception as e:
         print(f"\r  Failed: {e}                                            ")
         return 0
+
+
+def fluidsynth_ready():
+    try:
+        with open(FS_STAMP, encoding="utf-8") as f:
+            stamped = f.read().strip()
+    except OSError:
+        return False
+    return stamped == FS_VERSION and all(os.path.exists(os.path.join(FS_DIR, d)) for d in FS_DLLS)
+
+
+def setup_fluidsynth():
+    if fluidsynth_ready():
+        print(f"  [OK] FluidSynth {FS_VERSION} already installed.")
+        return True
+    if sys.platform != "win32":
+        print("  FluidSynth download is Windows-only - the built-in sample player will be used.")
+        return False
+    os.makedirs(FS_DIR, exist_ok=True)
+    tmp = os.path.join(FS_DIR, "_fluidsynth.zip")
+    try:
+        if download(FS_URL, tmp, f"FluidSynth {FS_VERSION} (~3 MB)") < 100_000:
+            return False
+        with open(tmp, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+        if digest != FS_SHA256:
+            print(f"  FluidSynth download has the wrong checksum ({digest}) - not installed.")
+            return False
+        with zipfile.ZipFile(tmp) as z:
+            members = {os.path.basename(n): n for n in z.namelist() if "/bin/" in n}
+            for dll in FS_DLLS:
+                if dll not in members:
+                    print(f"  {dll} missing from the FluidSynth archive - not installed.")
+                    return False
+            for dll in FS_DLLS:
+                with z.open(members[dll]) as src, open(os.path.join(FS_DIR, dll), "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        with open(FS_STAMP, "w", encoding="utf-8") as f:
+            f.write(FS_VERSION + "\n")
+        print(f"  [OK] FluidSynth {FS_VERSION} installed in lib/fluidsynth.")
+        return True
+    except Exception as e:
+        print(f"  FluidSynth setup failed: {e}")
+        return False
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
 
 
 def setup():
@@ -130,4 +188,6 @@ def setup():
 
 
 if __name__ == "__main__":
-    sys.exit(0 if setup() else 1)
+    piano_ok = setup()
+    fs_ok = setup_fluidsynth()   # optional for playing: without it the sample player is used
+    sys.exit(0 if piano_ok and fs_ok else 1)

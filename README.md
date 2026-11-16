@@ -15,7 +15,8 @@ click **More info → Run anyway**.
 ### Option B: Run from source
 1. Install Python 3.12 from https://python.org
 2. Double-click **PLAY_KEYFALL.bat**. The first launch installs the packages from
-   `requirements.txt` and downloads the piano soundfont (about 35 MB, once).
+   `requirements.txt` and downloads the piano soundfont (about 35 MB) and FluidSynth
+   (about 3 MB, checksum-verified), once.
 
 Or by hand: `pip install -r requirements.txt`, `python setup_audio.py`, `python main.py`.
 
@@ -105,8 +106,11 @@ Personal bests are kept per song, difficulty, mode and speed.
 ## 🔊 Sound
 
 Settings → **Note Sound Mode**:
-- **soundfont** (default): plays the `.sf2` chosen under *Soundfont Category / File*. Drop
-  extra soundfonts into `fluidsynth/<category>/`. The status line shows which one is loaded.
+- **soundfont** (default): plays the `.sf2` chosen under *Soundfont Category / File* through
+  the [FluidSynth](https://www.fluidsynth.org/) synthesizer, with the soundfont's velocity
+  layers, loops, release and reverb. Drop extra soundfonts into `fluidsynth/<category>/`.
+  The status line shows which one is loaded and whether FluidSynth is playing it. If the
+  FluidSynth DLLs in `lib/fluidsynth/` are missing, a simpler built-in sample player is used.
 - **synth**: built-in synthesized piano, no soundfont needed.
 - **midi_out**: sends notes to an external synth or digital piano (*MIDI Output Port*).
   *MIDI Out Velocity* overrides the velocity sent (0 = as played).
