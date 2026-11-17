@@ -468,10 +468,7 @@ class App:
         if self.state in (STATE_PLAYING, STATE_PAUSE_MENU):
             ui.draw_text(surf, f"{fps:.0f} FPS", px, ui.TEXT_DIM,
                          (W - int(8 * s), H - int(4 * s)), anchor="bottomright")
-        elif self.state == STATE_FREEPLAY:
-            ui.draw_text(surf, f"{VERSION} · {fps:.0f} FPS", px, ui.TEXT_DIM,
-                         (W - int(10 * s), int(8 * s)), anchor="topright")
-        else:   # menus: right end of the footer bar
+        else:   # menus and free play: right end of the footer bar
             ui.draw_text(surf, f"{VERSION} · {fps:.0f} FPS", px, ui.TEXT_DIM,
                          (W - int(16 * s), ui.footer_rect(W, H, s).centery), anchor="midright")
 
@@ -484,7 +481,8 @@ class App:
             elif action == "free play":
                 self.audio.play_sfx("confirm")
                 self.audio.stop_menu_music(500)
-                self.free_play = FreePlay(self.screen, self.audio)
+                self.free_play = FreePlay(self.screen, self.audio,
+                                          bool(self.midi_input.selected_port))
                 self.state = STATE_FREEPLAY
             elif action == "settings":
                 self.audio.play_sfx("confirm")
@@ -688,6 +686,8 @@ class App:
                 self.pause_menu.draw()
 
         elif self.state == STATE_FREEPLAY and self.free_play:
+            self.free_play.screen = self.screen
+            self.free_play.midi_connected = bool(self.midi_input.selected_port)
             self.free_play.draw()
 
         elif self.state == STATE_RESULTS:
@@ -702,15 +702,8 @@ class App:
         # The game's own cursor (the system one stays hidden); none while a song plays
         show_cursor = in_menu
         if self.state == STATE_FREEPLAY and self.free_play:
-            fp = self.free_play
-            # Only hide cursor if QWERTY or MIDI keys are held (not mouse clicks)
-            # Mouse movement always shows cursor
-            qwerty_or_midi_held = bool(fp._held - ({fp._mouse_pitch} if fp._mouse_pitch else set()))
-            show_cursor = not qwerty_or_midi_held
-            # If mouse moved recently, always show cursor
-            if fp._mouse_moved:
-                show_cursor = True
-                fp._mouse_moved = False  # consume the flag
+            # Hidden while playing on computer keys or MIDI, back as soon as the mouse moves
+            show_cursor = self.free_play.cursor_visible
 
         pygame.mouse.set_visible(False)
         if show_cursor and self._mouse_in:
