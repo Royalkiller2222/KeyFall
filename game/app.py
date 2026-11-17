@@ -229,6 +229,7 @@ class App:
         self.current_song: Optional[SongData] = None
         self.pause_menu: Optional[PauseMenu] = None
         self._kb_pitch_map = {}
+        self._key_hints = {}    # pitch -> computer key letter, shown on the in-game keyboard
         self._kb_down = set()   # QWERTY keys held in-game (highlighted on the keyboard)
 
         self._build_main_menu()
@@ -328,6 +329,7 @@ class App:
         self.engine.on_auto_note = self._on_auto_note
         self._kb_pitch_map = {PLAY_KEYS[i]: p for i, p in
                               enumerate(self.engine.lane_pitch_map[:len(PLAY_KEYS)])}
+        self._key_hints = {p: pygame.key.name(k).upper() for k, p in self._kb_pitch_map.items()}
         self._kb_down = set()
         self.audio.stop_menu_music(300)
         self.engine.playback_speed = speed
@@ -660,23 +662,23 @@ class App:
 
         elif self.state in (STATE_PLAYING, STATE_PAUSE_MENU):
             if self.engine and self.renderer:
+                e = self.engine
+                waiting = e.is_waiting
                 self.renderer.draw(
-                    self.current_song, self.engine.current_time,
-                    self.engine.num_lanes, self.engine.lane_pitch_map, dt,
-                    pressed_keys=self.midi_input._pressed_keys | self._kb_down)
-                stats = self.engine.stats
+                    self.current_song, e.current_time, e.num_lanes, e.lane_pitch_map, dt,
+                    pressed_keys=self.midi_input._pressed_keys | self._kb_down,
+                    # Without a MIDI keyboard, show which computer key plays which piano key
+                    key_hints=None if self.midi_input.selected_port else self._key_hints,
+                    targets=set(e.get_waiting_pitches()) if waiting else None)
                 self.renderer.draw_hud(
-                    score=stats.score, combo=stats.combo,
-                    multiplier=stats.multiplier, accuracy=stats.accuracy,
-                    streak=stats.streak, xp=self.xp_system.total_xp+stats.xp_earned,
-                    level=self.xp_system.level, xp_progress=self.xp_system.level_progress,
-                    song_progress=self.engine.get_song_progress(),
-                    mode=self.engine.mode,
-                    last_hit_quality=self.engine.last_hit_quality)
+                    e.stats, e.mode, e.get_song_progress(), max(0.0, e.current_time),
+                    self.current_song.duration_sec, speed=e.playback_speed,
+                    autoplay=e.used_autoplay, last_hit_quality=e.last_hit_quality,
+                    waiting=waiting, dt=dt)
 
                 if getattr(self, '_countdown_active', False):
                     self._draw_countdown(W, H)
-                elif self.engine.is_waiting:
+                elif waiting:
                     self._overlay_easy_wait(W, H)
 
             if self.state == STATE_PAUSE_MENU and self.pause_menu:
