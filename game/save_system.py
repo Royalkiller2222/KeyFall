@@ -54,6 +54,12 @@ def save_game(data: dict):
         print(f"[Save] Save failed: {e}")
 
 
+def leaderboard_key(song, mode: str, speed: float) -> str:
+    """Personal bests compare like with like: same chart (song + difficulty), mode and speed."""
+    return (f"{song.title} | {getattr(song, 'difficulty', '') or '-'} | "
+            f"{mode} | {round(speed * 100)}%")
+
+
 def add_leaderboard_entry(save_data: dict, song_title: str, stats):
     """Add a result to the leaderboard for a song (the caller saves)."""
     lb = save_data.setdefault("leaderboard", {})
