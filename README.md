@@ -34,29 +34,46 @@ supported. If no piano is connected you can use the computer keyboard.
 | ↑ / ↓ or mouse | Navigate |
 | ENTER | Select |
 | ESC | Back |
+| PgUp / PgDn, Home / End | Jump through the song list (Song Select) |
 | ← / → | Change difficulty (Song Select) |
-| M | Cycle mode Hard → Easy → Testing (Song Select) |
+| M | Cycle mode Hard → Easy → Autoplay (Song Select) |
+| [ / ] | Practice speed 25 / 50 / 75 / 100 % (Song Select) |
+| F5 | Refresh the song list (Song Select) |
 | F11 | Fullscreen |
 
-Song Select also has practice speed buttons (100 / 75 / 50 / 25 %) and **Open Folder** /
-**Refresh** buttons for adding songs.
+Everything in Song Select can also be clicked, and its **Open Folder** / **Refresh** buttons
+are there for adding songs. The bar at the bottom of each menu lists the keys it uses.
 
 ### In-Game
 | Key | Action |
 |-----|--------|
-| ESC | Pause menu: Resume · Restart · Settings · Toggle Mode · Main Menu |
+| ESC | Pause menu: Resume · Restart · Settings · Mode · Main Menu |
 | F5 | Restart (keeps the practice speed) |
 | F10 | End song & see results |
-| A S D F G H J K L Q W E R T | Keyboard fallback for the song's lowest 14 notes |
+| A S D F G H J K L Q W E R T | Keyboard fallback for the song's lowest 14 notes (the letters are shown on the piano when no MIDI piano is connected) |
+
+A countdown card shows the song, difficulty, mode and speed before the first notes arrive.
+While you play, the top of the screen shows your score (with the mode and speed under it),
+your combo with the multiplier and a meter that fills toward the next one, and your accuracy
+with the grade you're on track for. The song's progress runs along the far edge of the
+highway, and every judged note pops up as PERFECT, GREAT, GOOD or MISS. In EASY mode a panel
+names the notes the song is waiting for.
 
 ### Free Play
+An 88-key piano with nothing scored: click or drag across the keys, type the letters shown on
+them, or play a MIDI keyboard. Every note rises from its key as a neon bar, and the notes you
+play are named at the top with the chord or interval they make (C MAJOR, G7, PERFECT 5TH…).
+The header shows the octave the letters play, the sustain pedal, the instrument, and whether
+a MIDI keyboard is connected.
+
 | Key | Action |
 |-----|--------|
 | Z … M (and S D G H J) | C4 – B4 |
 | Q … P (and 2 3 5 6 7 9 0) | C5 – E6 |
-| ← / → | Octave down / up |
+| ← / → | Octave down / up (up to 3 each way) |
 | SPACE | Sustain pedal |
 | Mouse | Click or drag across keys |
+| ESC | Back to the main menu |
 
 ---
 
@@ -71,9 +88,10 @@ The song stops when a note or chord reaches the hit line and continues once you'
 every note of it. Wrong keys are ignored, nothing counts as a miss, and notes played up to
 a second early are accepted. Great for learning new songs.
 
-### TESTING 🟠 (autoplay)
+### AUTOPLAY 🟠 (formerly Testing)
 The song plays itself so you can watch and listen. Autoplay runs earn no XP and no
-leaderboard entries. This is the default mode until you change it in Settings.
+leaderboard entries, and switching to it from the pause menu stops that run from being
+scored. This is the default mode until you pick another under Settings → DEFAULT MODE.
 
 ---
 
@@ -105,15 +123,21 @@ Personal bests are kept per song, difficulty, mode and speed.
 
 ## 🔊 Sound
 
-Settings → **Note Sound Mode**:
-- **soundfont** (default): plays the `.sf2` chosen under *Soundfont Category / File* through
+Settings → **INSTRUMENT** picks what plays the notes:
+- **SOUNDFONT** (default): plays the `.sf2` picked under *Category* and *Instrument* through
   the [FluidSynth](https://www.fluidsynth.org/) synthesizer, with the soundfont's velocity
   layers, loops, release and reverb. Drop extra soundfonts into `fluidsynth/<category>/`.
-  The status line shows which one is loaded and whether FluidSynth is playing it. If the
-  FluidSynth DLLs in `lib/fluidsynth/` are missing, a simpler built-in sample player is used.
-- **synth**: built-in synthesized piano, no soundfont needed.
-- **midi_out**: sends notes to an external synth or digital piano (*MIDI Output Port*).
-  *MIDI Out Velocity* overrides the velocity sent (0 = as played).
+  If the FluidSynth DLLs in `lib/fluidsynth/` are missing, a simpler built-in sample player
+  is used.
+- **SYNTH**: the built-in synthesized piano, no soundfont needed.
+- **MIDI OUT**: sends the notes to an external synth, digital piano or music app (*Output
+  device*). *Velocity sent* overrides the velocity (AS PLAYED sends it as you played it).
+
+The status line under it says what is playing the notes (*Ready: …*) or, after you pick
+another, what SAVE will switch to. **TEST SOUND** plays a note on the instrument in use. The
+volumes (Master, Notes, Menu music, Sound effects) are on the same screen and change as you
+move them. Nothing is kept until you press **SAVE**; BACK or ESC puts the volumes back and
+drops the other changes.
 
 **Menu music:** put one MIDI file in `songs/_menu_music/`.
 **Custom sound effects:** replace the WAV files in `sfx/` (see `sfx/README.txt`).
@@ -154,13 +178,15 @@ workflow); the zip can be downloaded from that run for 7 days.
 ## 🔧 Troubleshooting
 
 **MIDI piano not detected?**
-- Connect the piano before launching (Free Play also retries every few seconds)
+- Connect the piano before launching (Free Play also retries every few seconds; its header
+  says MIDI CONNECTED once it finds one)
 - Install your piano's USB driver if required
 - Check Device Manager to confirm it's recognized as a MIDI device
 
 **No sound, or the wrong instrument?**
-Settings → Note Sound Mode = *soundfont*, then check the status line under it. If the
-selected soundfont is missing, KeyFall falls back to another installed one (pianos first).
+Settings → INSTRUMENT = **SOUNDFONT** (press SAVE if you changed it), then check the status
+line under it and press TEST SOUND. If the selected soundfont is missing, KeyFall falls back
+to another installed one (pianos first).
 
 **The game closed unexpectedly?**
 Details are saved in `keyfall_crash.txt` next to the game. Please include it when

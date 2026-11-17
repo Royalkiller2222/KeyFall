@@ -36,20 +36,27 @@ A built-in demo song plays if the folder is empty.
 | ENTER | Select |
 | ESC | Back / in-game pause menu (change mode there) |
 | M | Change mode in Song Select |
+| [ ] | Practice speed in Song Select |
 | F5 | Restart song |
 | F10 | End song |
-| A S D F G H J... | Play notes (if no MIDI piano) |
+| A S D F G H J... | Play notes (if no MIDI piano; the letters are shown on the piano) |
+
+The bar at the bottom of each menu shows the keys it uses.
+
+**Free Play** (main menu) is a piano to play freely: use your MIDI piano, click the keys,
+or type the letters shown on them. ← → change the octave, SPACE is the sustain pedal.
 
 ---
 
 ## 🎯 Modes
 - **EASY** 🟢 — The song waits until you play the notes at the hit line
 - **HARD** 🔴 — The song keeps going; misses cost points and break your combo
-- **TESTING** 🟠 — Autoplay: watch and listen (not scored)
+- **AUTOPLAY** 🟠 — The song plays itself: watch and listen (not scored)
 
 ---
 
 ## ❓ Troubleshooting
 - **MIDI piano not detected** → Plug in your piano, then re-launch
+- **No sound** → Settings → INSTRUMENT: check the status line and press TEST SOUND
 - **"Python not found"** → Reinstall Python and check "Add to PATH"
 - **Game closed by itself** → Open `keyfall_crash.txt` next to the game for details
