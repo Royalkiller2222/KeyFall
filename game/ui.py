@@ -279,9 +279,10 @@ def section(surf, label, x, y, w, s, color=NEON_CYAN, right=None):
 
 # ── Buttons, pills, segments ──────────────────────────────────────
 def button(surf, rect, label, s, color=NEON_CYAN, selected=False, hovered=False, t=0.0,
-           px=None, enabled=True, icon=None, markers=False):
+           px=None, enabled=True, icon=None, markers=False, idle_text=None):
     """Neon button. selected = keyboard focus (glows), hovered = mouse over.
-    icon: optional function(surf, rect, color) drawing a vector icon left of the label."""
+    icon: optional function(surf, rect, color) drawing a vector icon left of the label.
+    idle_text: label colour when neither selected nor hovered (default: muted grey)."""
     rect = pygame.Rect(rect)
     rad = max(4, int(8 * s))
     px = px or max(10, int(20 * s))
@@ -298,7 +299,7 @@ def button(surf, rect, label, s, color=NEON_CYAN, selected=False, hovered=False,
         tc = TEXT
     else:
         panel(surf, rect, alpha=205, border=EDGE, radius=rad)
-        tc = TEXT_MUTED
+        tc = idle_text or TEXT_MUTED
     lt = text(label, px, tc, True)
     isz = int(px * 0.9) if icon else 0
     gap = int(px * 0.5) if icon else 0

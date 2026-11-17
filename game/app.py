@@ -593,8 +593,10 @@ class App:
         elif self.state == STATE_SETTINGS:
             action = self.settings_screen.handle_event(event)
             if action == "back":
-                self.current_mode = self.save_data.get("settings",{}).get(
-                    "default_game_mode", MODE_TESTING)
+                # A newly saved default mode applies now; otherwise the mode last picked stays
+                if getattr(self.settings_screen, "default_mode_changed", True):
+                    self.current_mode = self.save_data.get("settings",{}).get(
+                        "default_game_mode", MODE_TESTING)
                 prev = getattr(self, '_paused_state', STATE_MENU)
                 self._paused_state = None
                 if prev == STATE_MENU:
