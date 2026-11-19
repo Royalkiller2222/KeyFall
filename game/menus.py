@@ -19,6 +19,7 @@ from game.constants import (DEFAULT_REVERB, LANE_COLORS, MODE_TESTING, NEON_CYAN
                             NEON_ORANGE, NEON_PINK, NEON_PURPLE, NEON_RED, NEON_YELLOW,
                             SONGS_DIR)
 from game.song_library import DIFFICULTY_COLORS, DIFFICULTY_ORDER, SongEntry
+from game.update_check import RELEASES_SHORT
 
 COVER_NAMES = ("cover.png", "cover.jpg", "cover.jpeg", "art.png", "art.jpg")
 
@@ -73,12 +74,14 @@ class MainMenu(MenuBase):
     }
 
     def __init__(self, screen, midi_ports, level, total_xp, level_progress, audio=None,
-                 song_count=None):
+                 song_count=None, updates=None):
         super().__init__(screen)
         self.midi_ports = midi_ports or []
         self.level, self.total_xp, self.level_progress = level, total_xp, level_progress
         self.audio = audio
         self.song_count = song_count
+        self.updates = updates          # the app's UpdateChecker: UPDATE shows when it found one
+        self.update_drawn = None        # where UPDATE was drawn last frame (None: not shown)
         self.selected = 0
         self.options = list(self.OPTIONS)
         self._notes = ui.FallingNotes(18, seed=11)
@@ -98,6 +101,21 @@ class MainMenu(MenuBase):
         self.selected = (self.selected + d) % len(self.options)
         _sfx(self.audio, "hover")
 
+    def _new_version(self):
+        return self.updates.available if self.updates else None
+
+    def _update_rect(self):
+        """The UPDATE button in the top right corner, or None while there's no newer version."""
+        new = self._new_version()
+        if not new:
+            return None
+        s = self.s
+        px = max(9, int(14 * s))
+        w = ui.text_w(f"UPDATE {new}", px, True) + int(px * 1.4) + int(30 * s)
+        h = max(26, int(36 * s))
+        m = int(20 * s)
+        return pygame.Rect(self.W - m - w, m, w, h)
+
     def handle_event(self, event) -> Optional[str]:
         self.track_mouse(event)
         if event.type == pygame.KEYDOWN:
@@ -107,6 +125,8 @@ class MainMenu(MenuBase):
                 self._move(1)
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
                 return self.options[self.selected].lower()
+            elif event.key == pygame.K_u and self._new_version():
+                return "update"
         elif event.type == pygame.MOUSEMOTION:
             i = self._btn_at(event.pos)
             if i is not None and i != self.selected:
@@ -117,6 +137,9 @@ class MainMenu(MenuBase):
             if i is not None:
                 self.selected = i
                 return self.options[i].lower()
+            ur = self._update_rect()
+            if ur and ur.collidepoint(event.pos):
+                return "update"
         return None
 
     def draw(self):
@@ -125,7 +148,7 @@ class MainMenu(MenuBase):
         self._notes.draw(surf, t, s)
 
         y = int(H * 0.10)
-        lh = ui.logo(surf, W // 2, y, int(96 * s), t)
+        lh = ui.logo(surf, W // 2, y, self._logo_px(), t)
         self._subtitle(W // 2, y + lh + int(4 * s))
 
         for i, opt in enumerate(self.options):
@@ -137,9 +160,40 @@ class MainMenu(MenuBase):
         ui.draw_text(surf, self.DESCRIPTIONS.get(self.options[self.selected], ""), int(15 * s),
                      ui.TEXT_MUTED, (W // 2, last.bottom + int(20 * s)), anchor="midtop")
 
-        foot = ui.footer(surf, s, [(("↑", "↓"), "Select"), ("ENTER", "Open"),
-                                   ("F11", "Fullscreen")])
+        hint_items = [(("↑", "↓"), "Select"), ("ENTER", "Open"), ("F11", "Fullscreen")]
+        ur = self.update_drawn = self._update_rect()
+        if ur:
+            self._draw_update(ur)
+            hint_items.append(("U", f"Get {self._new_version()}"))
+        foot = ui.footer(surf, s, hint_items)
         self._status_row(foot.y - int(24 * s))
+
+    def _draw_update(self, r):
+        """UPDATE vX.Y.Z, glowing softly; a click (or U) opens its download page."""
+        surf, s, t = self.screen, self.s, self._tick
+        hov = self.hovering(r)
+        if not hov:
+            ui.glow(surf, r, NEON_GREEN, max(4, int(8 * s)), int(10 * s),
+                    0.3 + 0.25 * math.sin(t * 2.2))
+        ui.button(surf, r, f"UPDATE {self._new_version()}", s, NEON_GREEN, selected=hov, t=t,
+                  px=max(9, int(14 * s)), icon=ui.icon_download, idle_text=NEON_GREEN)
+        u, col = self.updates, ui.TEXT_MUTED
+        if u.open_failed:                       # the link on a line of its own, whole
+            lines, col = [f"{u.opened_text()}. Get it from", RELEASES_SHORT], NEON_ORANGE
+        else:
+            lines = [u.opened_text() or ("Opens its download page in your browser" if hov
+                                         else "A new version of KeyFall is out")]
+        px = max(9, int(12 * s))
+        # as wide as the space right of the title, so the caption never runs into it
+        room = r.right - (self.W // 2 + ui.logo_w(self._logo_px()) // 2 + int(16 * s))
+        room = max(r.w, min(int(self.W * 0.45), room))
+        y = r.bottom + int(6 * s)
+        for line in lines:
+            y = ui.draw_text(surf, ui.fit(line, px, room), px, col, (r.right, y),
+                             anchor="topright").bottom + int(2 * s)
+
+    def _logo_px(self):
+        return int(96 * self.s)
 
     def _subtitle(self, cx, y):
         surf, s = self.screen, self.s

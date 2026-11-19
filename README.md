@@ -42,6 +42,7 @@ supported. If no piano is connected you can use the computer keyboard.
 | P | Sustain on / off for the selected song (Song Select) |
 | F5 | Refresh the song list (Song Select) |
 | F11 | Fullscreen |
+| U | Open the new version's download page (main menu, when an update is out) |
 | Mouse back button | Back (same as ESC) |
 
 The menus work with the mouse alone. The bar at the bottom of each menu lists the keys it
@@ -155,6 +156,20 @@ drops the other changes.
 
 **Menu music:** put one MIDI file in `songs/_menu_music/`.
 **Custom sound effects:** replace the WAV files in `sfx/` (see `sfx/README.txt`).
+
+---
+
+## 🔄 Updates
+
+Settings → **UPDATES** shows the version you have. **CHECK FOR UPDATES** asks GitHub right
+away whether a newer KeyFall is out, and while the game is open it also checks by itself once
+a week (never during a song). When there is one, the button becomes **DOWNLOAD vX.Y.Z** and
+the main menu shows **UPDATE vX.Y.Z** in its top-right corner (or press **U**): both open that
+release's page in your browser. Unzip the new version into a new folder and copy your
+`savegame.json` and any songs you added into it.
+
+The check is a single request to GitHub's public releases API. It sends nothing about you or
+your computer, and it never downloads or installs anything by itself.
 
 ---
 

@@ -23,3 +23,9 @@ SDL 3 (lib/fluidsynth/SDL3.dll)
 YDP Grand Piano soundfont (fluidsynth/pianos/piano.sf2)
   FreePats project, Creative Commons Attribution 3.0.
   https://freepats.zenvoid.org/Piano/
+
+certifi (_internal/certifi/cacert.pem)
+  Mozilla's list of root certificates, used to verify GitHub's certificate when KeyFall
+  checks for updates. Shipped unmodified.
+  License: Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
+  Source:  https://github.com/certifi/python-certifi

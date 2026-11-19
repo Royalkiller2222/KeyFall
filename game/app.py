@@ -22,6 +22,7 @@ from game.audio import AudioManager
 from game.save_system import (load_save, save_game, add_leaderboard_entry, leaderboard_key,
                               song_options, set_song_options)
 from game.song_organizer import organize_flat_midis
+from game.update_check import UpdateChecker
 from game.version import VERSION
 from game import selftest
 
@@ -207,7 +208,9 @@ class App:
         self._mouse_in = bool(pygame.mouse.get_focused())
 
         self.save_data = load_save()
-        self._save_due = None     # when the song options changed last get written (a time)
+        self._save_due = None     # when changes waiting to be saved get written (a time)
+        # Settings -> CHECK FOR UPDATES, and a check by itself once a week while the game runs
+        self.updates = UpdateChecker(self.save_data, on_change=self._save_soon)
         self._pointer_t = 0.0     # in a song: how much longer the pointer shows
         self.xp_system = XPSystem(self.save_data.get("total_xp", 0))
 
@@ -289,7 +292,8 @@ class App:
             self.xp_system.total_xp,
             self.xp_system.level_progress,
             audio=self.audio,
-            song_count=len(self.songs))
+            song_count=len(self.songs),
+            updates=self.updates)
 
     def _open_song_select(self):
         """A fresh song select (from the main menu)."""
@@ -308,10 +312,15 @@ class App:
         """Song Select changed a song's REVERB / SUSTAIN. Written to disk a moment after the
         last change (a drag along the slider changes it every frame)."""
         set_song_options(self.save_data, title, reverb, sustain)
+        self._save_soon()
+
+    def _save_soon(self):
+        """Save in a moment (song options, the update check's result). Never mid-song: a save
+        that comes due during a song waits for it to end or pause."""
         self._save_due = time.perf_counter() + self.SAVE_DELAY
 
     def _flush_save(self):
-        """Write song options that are still waiting to be saved."""
+        """Write changes that are still waiting to be saved."""
         if self._save_due is not None:
             self._save_due = None
             save_game(self.save_data)
@@ -533,9 +542,13 @@ class App:
                 self.state = STATE_FREEPLAY
             elif action == "settings":
                 self.audio.play_sfx("confirm")
-                self.settings_screen = SettingsScreen(self.screen,self.audio,self.save_data)
+                self.settings_screen = SettingsScreen(self.screen, self.audio, self.save_data,
+                                                      updates=self.updates)
                 self._paused_state = STATE_MENU
                 self.state = STATE_SETTINGS
+            elif action == "update":           # UPDATE vX.Y.Z: its page, in the browser
+                self.audio.play_sfx("confirm")
+                self.updates.open_page()
             elif action == "quit":
                 return "quit"
 
@@ -590,7 +603,8 @@ class App:
                 self._restart_song()
             elif action == "settings":
                 self.audio.play_sfx("confirm")
-                self.settings_screen = SettingsScreen(self.screen, self.audio, self.save_data, renderer=self.renderer)
+                self.settings_screen = SettingsScreen(self.screen, self.audio, self.save_data,
+                                                      renderer=self.renderer, updates=self.updates)
                 self._paused_state = self.state
                 self.state = STATE_SETTINGS
             elif action == "toggle_mode":
@@ -665,8 +679,11 @@ class App:
 
     def _update(self, dt):
         self._cursor_tick = getattr(self, '_cursor_tick', 0.0) + dt
-        if self._save_due is not None and time.perf_counter() >= self._save_due:
+        playing = self.state == STATE_PLAYING
+        if self._save_due is not None and time.perf_counter() >= self._save_due and not playing:
             self._flush_save()
+        # (the weekly update check starts only outside songs; one already running finishes)
+        self.updates.tick(auto_ok=not playing and self.state != STATE_PAUSE_MENU)
         # The pointer shown in a song stays while it rests on one of the keycaps
         if self._pointer_t > 0 and not (self._mouse_in and ui.hint_key_at(self._mouse_pos)):
             self._pointer_t = max(0.0, self._pointer_t - dt)

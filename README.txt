@@ -41,6 +41,7 @@ A built-in demo song plays if the folder is empty.
 | P | Sustain in Song Select (saved per song, default off) |
 | F5 | Restart song |
 | F10 | End song |
+| U | Get the new version (main menu, when one is out) |
 | A S D F G H J... | Play notes (if no MIDI piano; the letters are shown on the piano) |
 
 The bar at the bottom of each menu shows the keys it uses. Click them, too: the whole game
@@ -56,6 +57,15 @@ or type the letters shown on them. ← → change the octave, SPACE is the susta
 - **EASY** 🟢 — The song waits until you play the notes at the hit line
 - **HARD** 🔴 — The song keeps going; misses cost points and break your combo
 - **AUTOPLAY** 🟠 — The song plays itself: watch and listen (not scored)
+
+---
+
+## 🔄 Updates
+While it's open, KeyFall checks GitHub for a new version once a week. To check right away:
+Settings → UPDATES → **CHECK FOR UPDATES**. When one is out, click **UPDATE** at the top
+right of the main menu (or press U) to open its download page. Unzip it into a new folder
+and copy your `savegame.json` and your songs into it. Nothing personal is sent, and nothing
+is downloaded or installed by itself.
 
 ---
 

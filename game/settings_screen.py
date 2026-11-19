@@ -3,7 +3,8 @@ KeyFall - settings screen.
 
 Two panels, drawn with the shared kit in game.ui:
   left   VOLUME sliders, and the INSTRUMENT that plays the notes (soundfont, synth, MIDI out)
-  right  the DEFAULT MODE, the HIGHWAY PERSPECTIVE, and the keys you use during a song
+  right  the DEFAULT MODE, the HIGHWAY PERSPECTIVE, the keys you use during a song, and
+         UPDATES (CHECK FOR UPDATES asks GitHub for a newer KeyFall; see game.update_check)
 
 Volumes are heard live while you change them; everything is kept only when you SAVE (ENTER).
 BACK / ESC leaves without saving and puts the volumes back the way they were.
@@ -326,7 +327,7 @@ class Segmented:
 
 
 class Action:
-    """A push button (TEST SOUND, BACK, SAVE)."""
+    """A push button (TEST SOUND, CHECK FOR UPDATES, BACK, SAVE)."""
 
     def __init__(self, label, color, icon=None):
         self.label, self.color, self.icon = label, color, icon
@@ -338,9 +339,10 @@ class Action:
 
 # ── Settings screen ───────────────────────────────────────────────
 class SettingsScreen:
-    def __init__(self, screen, audio_manager, save_data, renderer=None):
+    def __init__(self, screen, audio_manager, save_data, renderer=None, updates=None):
         self.screen, self.audio, self.save_data = screen, audio_manager, save_data
         self.renderer = renderer          # given when opened from the pause menu
+        self.updates = updates            # the app's UpdateChecker (no UPDATES section if None)
         self._tick = 0.0
         self._flash = 0.0                 # time left on the SAVED badge
         self._lay_key = None
@@ -409,6 +411,7 @@ class SettingsScreen:
         self.vp_seg = Segmented(vals, min(range(len(vals)), key=lambda i: abs(vals[i] - vf)),
                                 [lab for _, lab in PERSPECTIVES], [NEON_CYAN] * len(vals))
 
+        self.btn_update = Action("CHECK FOR UPDATES", NEON_CYAN, ui.icon_refresh)
         self.btn_back = Action("BACK", NEON_CYAN)
         self.btn_save = Action("SAVE", NEON_GREEN, ui.icon_check)
         self._focus = self.sl_master
@@ -425,7 +428,10 @@ class SettingsScreen:
             rows += [self.sf2_cat_sel, self.sf2_file_sel]
         elif eng == "midi_out":
             rows += [self.port_sel, self.vel_sl]
-        return rows + [self.btn_test, self.gm_seg, self.vp_seg, self.btn_back, self.btn_save]
+        rows += [self.btn_test, self.gm_seg, self.vp_seg]
+        if self.updates is not None:
+            rows.append(self.btn_update)
+        return rows + [self.btn_back, self.btn_save]
 
     def _boxes(self):
         eng = self.engine_seg.value
@@ -687,10 +693,26 @@ class SettingsScreen:
         if b is self.btn_test:
             self.audio.play_note(60, 90, 1.0)
             return None
+        if b is self.btn_update:
+            self._press_update()
+            return None
         if b is self.btn_save:
             self._save_now()
             return None
         return self._back()
+
+    def _press_update(self):
+        """CHECK FOR UPDATES asks GitHub (in the background). Once a newer version is known,
+        the button opens its download page instead."""
+        u = self.updates
+        if u is None or u.checking:
+            return
+        if u.available:
+            self._sfx("confirm")
+            u.open_page()
+        else:
+            self._sfx("click")
+            u.check()
 
     def _save_now(self):
         self._live()
@@ -783,12 +805,27 @@ class SettingsScreen:
         pos["highway_desc"] = (x, y, w)
         y += desc_h + int(22 * s)
         pos["keys"] = (x, y, w)
+        # (KEYS is a heading, two rows of keycaps and a line of text: see _draw_right)
+        cap_h = ui.hints_surface([("ESC", "Pause")], s).get_height()
+        y += sec_h + int(12 * s) + cap_h + int(8 * s) + cap_h + int(6 * s) + desc_h
         bh, g = int(44 * s), int(12 * s)
         by = R.bottom - pad - bh
         half = (w - g) // 2
         self.btn_back.place(pygame.Rect(x, by, half, bh))
         self.btn_save.place(pygame.Rect(x + half + g, by, w - half - g, bh))
         pos["note"] = (x, by - int(10 * s), w)
+        # UPDATES under KEYS: a heading, the status and CHECK FOR UPDATES, a line of text.
+        # (A short window moves it up rather than into the note above BACK / SAVE.)
+        ubh = int(32 * s)
+        block = sec_h + int(12 * s) + ubh + int(8 * s) + desc_h
+        y = min(y + int(22 * s), by - int(10 * s) - desc_h - int(14 * s) - block)
+        pos["updates"] = (x, y, w)
+        y += sec_h + int(12 * s)
+        bpx = max(9, int(13 * s))
+        bw = ui.text_w(self.btn_update.label, bpx, True) + int(bpx * 1.4) + int(32 * s)
+        self.btn_update.place(pygame.Rect(x + w - bw, y, bw, ubh))
+        pos["upd_status"] = pygame.Rect(x, y, w - bw - int(12 * s), ubh)
+        pos["upd_line"] = (x, y + ubh + int(8 * s), w)
 
     # ── drawing ───────────────────────────────────────────────────
     def _hover(self, rect):
@@ -908,6 +945,8 @@ class SettingsScreen:
                      anchor="topleft", interactive=False)
         ui.draw_text(surf, ui.fit("Lowest note first. They work with or without a MIDI keyboard.",
                                   px, w), px, ui.TEXT_DIM, (x, r.bottom + int(6 * s)))
+        if self.updates is not None:
+            self._draw_updates(focus)
 
         x, yb, w = self._pos["note"]
         if dirty:
@@ -925,6 +964,42 @@ class SettingsScreen:
         ui.button(surf, b.rect, b.label, s, b.color, selected=focus is b,
                   hovered=dirty or self._hover(b.rect), t=t, px=bpx, icon=b.icon,
                   idle_text=ui.shade(b.color, 0.8))
+
+    def _draw_updates(self, focus):
+        """UPDATES: what the last check found, CHECK FOR UPDATES (DOWNLOAD once there is a
+        newer version) and when it last checked."""
+        surf, s, t, u = self.screen, self._s, self._tick, self.updates
+        px = max(9, int(13 * s))
+        x, y, w = self._pos["updates"]
+        rpx = max(9, int(12 * s))                 # (ui.section's size for the right text)
+        ui.section(surf, "UPDATES", x, y, w, s, right=ui.fit(f"you have {u.current}", rpx, w // 2))
+        kind, txt = u.status()
+        col = {"busy": NEON_CYAN, "new": NEON_GREEN, "ok": NEON_GREEN,
+               "warn": NEON_ORANGE}.get(kind, ui.TEXT_MUTED)
+        r = self._pos["upd_status"]
+        isz = max(8, int(12 * s))
+        c = (r.x + isz // 2, r.centery)
+        if kind == "busy":
+            ui.spinner(surf, c, isz // 2, col, t)
+        else:
+            ui.status_dot(surf, c, col, s)
+        tx = r.x + isz + int(8 * s)
+        ui.draw_text(surf, ui.fit(txt, px, r.right - tx), px, col, (tx, r.centery), anchor="midleft")
+
+        b, new = self.btn_update, u.available
+        if u.checking:
+            label, color, icon = "CHECKING…", NEON_CYAN, None
+        elif new:
+            label, color, icon = f"DOWNLOAD {new}", NEON_GREEN, ui.icon_download
+            if ui.text_w(label, px, True) + int(px * 1.4) + int(20 * s) > b.rect.w:
+                label = "DOWNLOAD"
+        else:
+            label, color, icon = b.label, NEON_CYAN, ui.icon_refresh
+        ui.button(surf, b.rect, label, s, color, selected=focus is b, hovered=self._hover(b.rect),
+                  t=t, px=px, enabled=not u.checking, icon=icon, idle_text=ui.shade(color, 0.85))
+        x, y, w = self._pos["upd_line"]          # (the link is brighter: it's to be read)
+        ui.draw_text(surf, ui.fit(u.detail_text(), px, w), px,
+                     ui.TEXT_MUTED if u.open_failed else ui.TEXT_DIM, (x, y))
 
     def _draw_perspective(self, mouse):
         """Three cells, each with a small drawing of the highway at that perspective."""

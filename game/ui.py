@@ -607,6 +607,12 @@ class FallingNotes:
 # ── Title ─────────────────────────────────────────────────────────
 _logo_glow = {}
 
+def logo_w(px):
+    """How wide logo() draws the title at px (without its glow)."""
+    f = font(px, True)
+    return sum(f.size(ch)[0] for ch in "KEYFALL") + max(2, int(px * 0.05)) * 6
+
+
 def logo(surf, cx, y, px, t):
     """The KEYFALL title: cyan letters with a slow colour wave over a soft neon glow.
     Returns its height."""
@@ -685,6 +691,15 @@ def icon_check(surf, rect, color, w=2):
     r = pygame.Rect(rect)
     pygame.draw.lines(surf, color, False, [(r.x, r.y + int(r.h * .55)),
                                            (r.x + int(r.w * .38), r.bottom - 1), (r.right, r.y)], w)
+
+
+def icon_download(surf, rect, color, w=2):
+    """An arrow down into a tray."""
+    r = pygame.Rect(rect)
+    def P(fx, fy): return (r.x + int(r.w * fx), r.y + int(r.h * fy))
+    pygame.draw.line(surf, color, P(.5, 0), P(.5, .64), w)
+    pygame.draw.lines(surf, color, False, [P(.2, .36), P(.5, .66), P(.8, .36)], w)
+    pygame.draw.lines(surf, color, False, [P(0, .62), P(0, .96), P(1, .96), P(1, .62)], w)
 
 
 def spinner(surf, center, radius, color, t, w=2):

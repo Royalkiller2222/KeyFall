@@ -4,11 +4,14 @@ KeyFall - automated smoke test, enabled with KEYFALL_SELFTEST=1.
 build_release.py --selftest (and the GitHub build) runs the real game headless with SDL's
 dummy video/audio drivers and this enabled. It drives the actual game loop by injecting input:
 menus -> densest song (autoplay) -> pause -> settings + mouse wheel -> mode toggle + key presses
--> results -> hardest chart -> free play -> settings -> quit, and checks the game reached each
-screen. The game exits with code 0 only if every check passed; a report is written next to the EXE.
+-> results -> hardest chart -> free play -> settings + CHECK FOR UPDATES (answered by a canned
+reply: the test never goes online) -> the main menu's UPDATE -> quit, and checks the game reached
+each screen. The game exits with code 0 only if every check passed; a report is written next to
+the EXE.
 """
 
 import os
+import sys
 import time
 
 import pygame
@@ -46,6 +49,7 @@ class SelfTest:
         self._pending = None
         self._i = 0
         self._mode_before = None
+        self._ca_ok = False             # (set by _check_updates)
         self._steps = self._script()
 
     # ── the script ────────────────────────────────────────────────
@@ -90,7 +94,12 @@ class SelfTest:
             (0.5, "free play -> main menu",     lambda: _keys(K.K_ESCAPE),           at(STATE_MENU)),
             (0.5, "settings from main menu",    lambda: _keys(K.K_DOWN, K.K_DOWN, K.K_RETURN), at(STATE_SETTINGS)),
             (0.5, "mouse wheel in settings",    _wheel,                              at(STATE_SETTINGS)),
+            (1.0, "check for updates (offline)", self._check_updates,                self._update_found),
             (0.5, "settings -> main menu",      lambda: _keys(K.K_ESCAPE),           at(STATE_MENU)),
+            (0.3, "main menu offers the update", None,
+                                                lambda: a.main_menu.update_drawn is not None),
+            (0.3, "U opens the release page",   lambda: _keys(K.K_u),
+                                                lambda: a.updates.opened_at is not None),
         ]
 
     # ── step helpers ──────────────────────────────────────────────
@@ -158,6 +167,28 @@ class SelfTest:
     def _midi_key_up(self):
         return (self._midi_pitch not in self.app.midi_input._pressed_keys
                 and not self.app.audio.sustain)
+
+    def _check_updates(self):
+        """Settings -> CHECK FOR UPDATES, with GitHub's answer replaced by a canned one (the
+        self-test never goes online, and opening the page opens no browser)."""
+        from game import update_check as uc
+        u = self.app.updates
+        ctx = uc.ssl_context()                     # HTTPS is available in this build
+        mozilla = uc.certifi is not None and os.path.isfile(uc.certifi.where())
+        self.info.append(f"update check: this copy is {u.current}, "
+                         f"{len(ctx.get_ca_certs())} CA certificates"
+                         + (" (Mozilla's included)" if mozilla else ", certifi MISSING"))
+        # a built EXE must carry certifi's list, or checks fail on PCs missing GitHub's root
+        self._ca_ok = mozilla or not getattr(sys, "frozen", False)
+        if uc.version_key(u.current) is None:      # e.g. a dev-<sha> CI build: no number
+            u.current = "v1.0.0"
+        u.fetch = lambda: "v999.0.0"
+        return _click(self.app.settings_screen.btn_update.rect.center)
+
+    def _update_found(self):
+        u = self.app.updates
+        return (not u.checking and u.latest == "v999.0.0" and u.available == "v999.0.0"
+                and self._ca_ok)
 
     def _toggle_mode(self):
         self._mode_before = self.app.engine.mode
