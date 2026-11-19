@@ -294,7 +294,7 @@ class AudioManager:
         self._lock = threading.RLock()
         self._next_voice = 0
         self._held: Dict[int, pygame.mixer.Channel] = {}   # key -> channel sounding it
-        self.sustain = False
+        self.sustain = False          # the player's pedal (MIDI CC 64, or Space in Free Play)
         self._sustained = set()       # keys released while the sustain pedal is down
         self._recent = deque()        # start times of recent notes (dense-passage gain)
         self._midi_offs = []          # heap of (due time, pitch) for MIDI-out one-shots
@@ -303,6 +303,10 @@ class AudioManager:
         self._fs: Optional[_fsn.Synth] = None
         self._fs_offs = []            # heap of (due time, channel, pitch, token) one-shot ends
         self._fs_tokens: Dict[tuple, int] = {}   # (channel, pitch) -> latest note-on
+
+        # The song's sound (Song Select REVERB / SUSTAIN), kept across synth and port changes
+        self._fx_reverb: float = DEFAULT_REVERB / 100.0
+        self._fx_sustain: bool = False   # the pedal held down for the whole song
 
         # Instrument loading (background thread)
         self._fluid_ready: bool = False
@@ -359,8 +363,9 @@ class AudioManager:
     def _disconnect_midi_out(self):
         if self.midi_out_port:
             try:
-                # All notes off
+                # Pedal up, then all notes off (a held pedal would keep them ringing)
                 for ch in range(16):
+                    self.midi_out_port.send(mido.Message('control_change', channel=ch, control=64, value=0))
                     self.midi_out_port.send(mido.Message('control_change', channel=ch, control=123, value=0))
                 self.midi_out_port.close()
             except Exception:
@@ -509,6 +514,7 @@ class AudioManager:
             self._fs_tokens.clear()
             if old is not None:
                 old.close()
+            self._apply_fs_fx()
 
     def _load_worker(self, gen: int):
         try:
@@ -676,7 +682,7 @@ class AudioManager:
             if self._use_fs():           # FluidSynth keeps it ringing while the pedal is down
                 self._fs.noteoff(_fsn.PLAYER_CHAN, pitch)
                 return
-            if self.sustain:
+            if self.sustain or self._fx_sustain:
                 if pitch in self._held:
                     self._sustained.add(pitch)
                 return
@@ -688,19 +694,24 @@ class AudioManager:
             ch.fadeout(RELEASE_FADE_MS)   # (skipped if that voice now plays another note)
 
     def set_sustain(self, down: bool):
-        """Sustain pedal (MIDI CC 64, or Space in Free Play)."""
-        if self._midi_out_active():
-            self._midi_send('control_change', control=64, value=127 if down else 0)
-            return
+        """Sustain pedal (MIDI CC 64, or Space in Free Play). While the song's SUSTAIN
+        option is on, the pedal stays down whatever the player does."""
         with self._lock:
             self.sustain = down
-            if self._use_fs():
-                self._fs.cc(_fsn.PLAYER_CHAN, 64, 127 if down else 0)
+            pedal = down or self._fx_sustain
+            if self._midi_out_active():
+                self._midi_send('control_change', control=64, value=127 if pedal else 0)
                 return
-            if not down:
-                for p in list(self._sustained):
-                    self._release(p)
-                self._sustained.clear()
+            if self._use_fs():
+                self._fs.cc(_fsn.PLAYER_CHAN, 64, 127 if pedal else 0)
+                return
+            if not pedal:
+                self._release_sustained()
+
+    def _release_sustained(self):
+        for p in list(self._sustained):
+            self._release(p)
+        self._sustained.clear()
 
     def play_note(self, pitch: int, velocity: int = 90, duration: Optional[float] = None,
                   volume_scale: float = 1.0):
@@ -737,7 +748,56 @@ class AudioManager:
         if self.midi_out_port:
             for _, pitch in pending:
                 self._midi_send('note_off', note=pitch, velocity=0)
+            self._midi_send('control_change', control=64, value=0)
             self._midi_send('control_change', control=123, value=0)
+        self._apply_fx()   # the song's pedal goes back down (released notes stay released)
+
+    # ── The song's sound (Song Select: REVERB / SUSTAIN) ──────────
+    @property
+    def has_reverb(self) -> bool:
+        """Whether the reverb is heard: FluidSynth and MIDI out have one, the SYNTH and the
+        built-in sample player don't."""
+        if self.note_sound_mode == "midi_out":
+            return self.midi_out_port is not None
+        return self.note_sound_mode == "soundfont" and (self._fs is not None or self._loading)
+
+    @property
+    def song_fx(self):
+        """(reverb 0..1, sustain) in use."""
+        return self._fx_reverb, self._fx_sustain
+
+    def set_song_fx(self, reverb: float, sustain: bool):
+        """The song's reverb (0..1) and whether the sustain pedal is held for all of it."""
+        reverb, sustain = max(0.0, min(1.0, float(reverb))), bool(sustain)
+        if (reverb, sustain) != (self._fx_reverb, self._fx_sustain):
+            self._fx_reverb, self._fx_sustain = reverb, sustain
+            self._apply_fx()
+
+    def reset_song_fx(self):
+        """Outside a song (menus, Free Play): the default reverb, no held pedal."""
+        self.set_song_fx(DEFAULT_REVERB / 100.0, False)
+
+    def _apply_fx(self):
+        """Send the song's reverb and pedal to whatever plays the notes."""
+        with self._lock:
+            self._apply_fs_fx()
+            pedal = self.sustain or self._fx_sustain
+            if self._midi_out_active():
+                self._midi_send('control_change', control=91, value=round(127 * self._fx_reverb))
+                self._midi_send('control_change', control=64, value=127 if pedal else 0)
+            elif not pedal and self._sustained:
+                self._release_sustained()
+
+    def _apply_fs_fx(self):
+        """(caller holds self._lock) The live synth's reverb and pedals: the player's channel
+        follows the player's pedal too, one-shots (autoplay, previews) only the song's."""
+        if self._fs is None:
+            return
+        self._fs.set_reverb(self._fx_reverb)
+        song = 127 if self._fx_sustain else 0
+        self._fs.cc(_fsn.AUTO_CHAN, 64, song)
+        self._fs.cc(_fsn.QUIET_CHAN, 64, song)
+        self._fs.cc(_fsn.PLAYER_CHAN, 64, 127 if (self.sustain or self._fx_sustain) else 0)
 
     def update(self):
         """Per-frame housekeeping (main thread): due one-shot note-offs."""
@@ -925,10 +985,12 @@ class AudioManager:
         self.note_sound_mode = mode
         self.sf2_entry = sf2
         self.update_volumes()
+        self._apply_fx()
         if changed or needs_tones or not self._loaded_once:
             self.reload_instrument()
 
     def shutdown(self):
+        self._fx_sustain = False
         self.all_notes_off(0)
         self._disconnect_midi_out()
         self._load_gen += 1            # a load still running must not install a new synth

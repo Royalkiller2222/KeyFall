@@ -38,11 +38,22 @@ supported. If no piano is connected you can use the computer keyboard.
 | ← / → | Change difficulty (Song Select) |
 | M | Cycle mode Hard → Easy → Autoplay (Song Select) |
 | [ / ] | Practice speed 25 / 50 / 75 / 100 % (Song Select) |
+| - / + | Reverb for the selected song (Song Select) |
+| P | Sustain on / off for the selected song (Song Select) |
 | F5 | Refresh the song list (Song Select) |
 | F11 | Fullscreen |
+| Mouse back button | Back (same as ESC) |
 
-Everything in Song Select can also be clicked, and its **Open Folder** / **Refresh** buttons
-are there for adding songs. The bar at the bottom of each menu lists the keys it uses.
+The menus work with the mouse alone. The bar at the bottom of each menu lists the keys it
+uses, and each key in it is a button: click **ESC Back** to go back, **ENTER Play** to play,
+and so on. Everything in Song Select can also be clicked, and its **Open Folder** /
+**Refresh** buttons are there for adding songs.
+
+**Song sound:** Song Select also sets each song's **REVERB** (0–100 %, default 25 %: drag
+the slider, scroll over it or press - / +) and **SUSTAIN** (holds the sustain pedal down
+for the whole song, default OFF; press P). Both are saved with the song and apply whenever
+you play it. The reverb is heard with the SOUNDFONT instrument and through MIDI OUT; with
+SYNTH it's still saved, and the slider says what it needs.
 
 ### In-Game
 | Key | Action |
@@ -52,12 +63,15 @@ are there for adding songs. The bar at the bottom of each menu lists the keys it
 | F10 | End song & see results |
 | A S D F G H J K L Q W E R T | Keyboard fallback for the song's lowest 14 notes (the letters are shown on the piano when no MIDI piano is connected) |
 
-A countdown card shows the song, difficulty, mode and speed before the first notes arrive.
-While you play, the top of the screen shows your score (with the mode and speed under it),
-your combo with the multiplier and a meter that fills toward the next one, and your accuracy
-with the grade you're on track for. The song's progress runs along the far edge of the
-highway, and every judged note pops up as PERFECT, GREAT, GOOD or MISS. In EASY mode a panel
-names the notes the song is waiting for.
+A countdown card shows the song, difficulty, mode and speed before the first notes arrive;
+its keys can be clicked. While you play, the top of the screen shows your score (with the
+mode and speed under it), your combo with the multiplier and a meter that fills toward the
+next one, and your accuracy with the grade you're on track for. The song's progress runs
+along the far edge of the highway, the notes fall with smooth (anti-aliased) edges, and
+every judged note pops up as PERFECT, GREAT, GOOD or MISS. In EASY mode a panel names the
+notes the song is waiting for. Move the mouse during a song and the pointer appears with
+**ESC Pause**, **F5 Restart** and **F10 End song** as buttons under the score; they fade
+out when the mouse rests.
 
 ### Free Play
 An 88-key piano with nothing scored: click or drag across the keys, type the letters shown on
@@ -71,7 +85,7 @@ a MIDI keyboard is connected.
 | Z … M (and S D G H J) | C4 – B4 |
 | Q … P (and 2 3 5 6 7 9 0) | C5 – E6 |
 | ← / → | Octave down / up (up to 3 each way) |
-| SPACE | Sustain pedal |
+| SPACE | Sustain pedal (hold it; clicking SPACE in the bottom bar turns it on / off) |
 | Mouse | Click or drag across keys |
 | ESC | Back to the main menu |
 

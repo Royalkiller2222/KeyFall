@@ -902,9 +902,10 @@ class SettingsScreen:
         x, y, w = self._pos["keys"]
         y += ui.section(surf, "KEYS", x, y, w, s, right="during a song") + int(12 * s)
         r = ui.hints(surf, [("ESC", "Pause"), ("F5", "Restart"), ("F10", "End song"),
-                            ("F11", "Fullscreen")], (x, y), s, anchor="topleft")
+                            ("F11", "Fullscreen")], (x, y), s, anchor="topleft",
+                     interactive=False)          # (a list of keys, not buttons)
         r = ui.hints(surf, [(PLAY_KEYS, "Play notes")], (x, r.bottom + int(8 * s)), s,
-                     anchor="topleft")
+                     anchor="topleft", interactive=False)
         ui.draw_text(surf, ui.fit("Lowest note first. They work with or without a MIDI keyboard.",
                                   px, w), px, ui.TEXT_DIM, (x, r.bottom + int(6 * s)))
 

@@ -19,7 +19,8 @@ from game.menus import MainMenu, SongSelectMenu, ResultsScreen
 from game.settings_screen import SettingsScreen
 from game.freeplay import FreePlay
 from game.audio import AudioManager
-from game.save_system import load_save, save_game, add_leaderboard_entry, leaderboard_key
+from game.save_system import (load_save, save_game, add_leaderboard_entry, leaderboard_key,
+                              song_options, set_song_options)
 from game.song_organizer import organize_flat_midis
 from game.version import VERSION
 from game import selftest
@@ -186,6 +187,9 @@ class PauseMenu:
 
 
 class App:
+    POINTER_SHOW = 2.5     # s the pointer (and the song's keys) stay up after the mouse moves
+    SAVE_DELAY = 0.8       # s after the last change to a song's sound before it's saved
+
     def __init__(self):
         # Must come before pygame.init(), which opens the mixer with default settings
         pygame.mixer.pre_init(44100, -16, 2, 512)
@@ -203,6 +207,8 @@ class App:
         self._mouse_in = bool(pygame.mouse.get_focused())
 
         self.save_data = load_save()
+        self._save_due = None     # when the song options changed last get written (a time)
+        self._pointer_t = 0.0     # in a song: how much longer the pointer shows
         self.xp_system = XPSystem(self.save_data.get("total_xp", 0))
 
         self.state = STATE_MENU
@@ -275,6 +281,7 @@ class App:
             self.song_select.set_entries(self.songs)
 
     def _build_main_menu(self):
+        self.audio.reset_song_fx()      # a song's own reverb / pedal ends with it
         self.main_menu = MainMenu(
             self.screen,
             self.midi_input.available_ports,
@@ -290,10 +297,24 @@ class App:
             self.screen, self.songs, self.current_mode,
             bool(self.midi_input.selected_port), audio=self.audio,
             pb_lookup=lambda song, mode, speed:
-                self._get_personal_best(leaderboard_key(song, mode, speed)))
+                self._get_personal_best(leaderboard_key(song, mode, speed)),
+            fx_lookup=lambda title: song_options(self.save_data, title),
+            fx_store=self._store_song_fx)
         self.song_select._refresh_cb = self._refresh_songs
         self.audio.stop_menu_music(500)    # so the song preview can be heard
         self.state = STATE_SONG_SELECT
+
+    def _store_song_fx(self, title, reverb, sustain):
+        """Song Select changed a song's REVERB / SUSTAIN. Written to disk a moment after the
+        last change (a drag along the slider changes it every frame)."""
+        set_song_options(self.save_data, title, reverb, sustain)
+        self._save_due = time.perf_counter() + self.SAVE_DELAY
+
+    def _flush_save(self):
+        """Write song options that are still waiting to be saved."""
+        if self._save_due is not None:
+            self._save_due = None
+            save_game(self.save_data)
 
     def _run_info(self):
         """The current run's details, for the pause menu and the results screen."""
@@ -326,6 +347,10 @@ class App:
         vf = self.save_data.get("settings",{}).get("vanish_frac", 0.67)
         self.renderer._vanish_frac = vf
         self.audio.all_notes_off(120)   # cut song-preview / previous-run notes
+        self._flush_save()              # (not later, mid-song)
+        opt = song_options(self.save_data, song.title)    # the song's own reverb and pedal
+        self.audio.set_song_fx(opt["reverb"] / 100.0, opt["sustain"])
+        self._pointer_t = 0.0
         self.engine.on_auto_note = self._on_auto_note
         self._kb_pitch_map = {PLAY_KEYS[i]: p for i, p in
                               enumerate(self.engine.lane_pitch_map[:len(PLAY_KEYS)])}
@@ -390,6 +415,7 @@ class App:
             elif kind == "sustain":
                 self.free_play.set_sustain(a, sound=False)
         elif self.state == STATE_PLAYING and self.engine and kind == "on":
+            self._pointer_t = 0.0               # playing: the pointer hides
             self._apply_result(self.engine.on_midi_note(a, b, True, t))
 
     def _leaderboard_key(self):
@@ -433,8 +459,11 @@ class App:
                 if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN,
                                   pygame.MOUSEBUTTONUP):
                     self._mouse_pos, self._mouse_in = event.pos, True
+                    if event.type == pygame.MOUSEMOTION:
+                        self._pointer_t = self.POINTER_SHOW
                 elif event.type == pygame.WINDOWLEAVE:
                     self._mouse_in = False
+                event = self._mouse_shortcut(event)
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                     self._toggle_fullscreen(); continue
                 if event.type == pygame.VIDEORESIZE and not self._fullscreen:
@@ -444,7 +473,10 @@ class App:
                     if self.renderer:
                         self.renderer.screen=self.screen
                         self.renderer.on_resize(event.w,event.h)
+                before = self.state
                 if self._handle_event(event) == "quit": running = False
+                if self.state != before:
+                    ui.begin_frame()    # the keycaps on screen belonged to the last screen
             for midi_event in self.midi_input.poll():
                 self._on_midi_event(*midi_event)
             self._update(dt)
@@ -453,10 +485,24 @@ class App:
             self._draw_fps()
             pygame.display.flip()
 
+        self._flush_save()
         self.audio.shutdown()
         self.midi_input.disconnect()
         exit_code = 0 if self._selftest is None or self._selftest.passed else 1
         pygame.quit(); sys.exit(exit_code)
+
+    @staticmethod
+    def _mouse_shortcut(event):
+        """The game works with the mouse alone: a click on a keycap hint is that key press,
+        and the mouse's back button is ESC."""
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                key = ui.hint_key_at(event.pos)
+                if key is not None:
+                    return ui.key_event(key)
+            elif event.button == 6:           # X1, the "back" side button
+                return ui.key_event(pygame.K_ESCAPE)
+        return event
 
     def _draw_fps(self):
         """Version + FPS, placed per screen so they never cover anything."""
@@ -480,6 +526,7 @@ class App:
                 self._open_song_select()
             elif action == "free play":
                 self.audio.play_sfx("confirm")
+                self.audio.reset_song_fx()
                 self.audio.stop_menu_music(500)
                 self.free_play = FreePlay(self.screen, self.audio,
                                           bool(self.midi_input.selected_port))
@@ -502,12 +549,16 @@ class App:
                     self._start_song(song, mode, speed=speed)
                 elif action == "back":
                     self.audio.play_sfx("back")
+                    self.audio.reset_song_fx()      # (pedal up first, so the preview stops)
                     self.audio.all_notes_off()      # stop the song preview
+                    self._flush_save()
                     self.state = STATE_MENU
                     self.audio.start_menu_music()   # restart music when going back
 
         elif self.state == STATE_PLAYING:
             if event.type == pygame.KEYDOWN:
+                if not getattr(event, "clicked", False):
+                    self._pointer_t = 0.0       # playing on the keys: the pointer hides
                 if event.key == pygame.K_ESCAPE:
                     # Open pause menu instead of just pausing
                     self.engine.pause()
@@ -614,6 +665,11 @@ class App:
 
     def _update(self, dt):
         self._cursor_tick = getattr(self, '_cursor_tick', 0.0) + dt
+        if self._save_due is not None and time.perf_counter() >= self._save_due:
+            self._flush_save()
+        # The pointer shown in a song stays while it rests on one of the keycaps
+        if self._pointer_t > 0 and not (self._mouse_in and ui.hint_key_at(self._mouse_pos)):
+            self._pointer_t = max(0.0, self._pointer_t - dt)
         if self.state == STATE_MENU:
             self.main_menu.update(dt)
         elif self.state == STATE_FREEPLAY and self.free_play:
@@ -645,10 +701,20 @@ class App:
         elif self.state == STATE_SETTINGS:
             self.settings_screen.update(dt)
 
+    def _cursor_shown(self):
+        """The game's own pointer: always in the menus; in Free Play it hides while you play
+        on the keys or MIDI; in a song it shows for a moment after the mouse moves."""
+        if self.state == STATE_FREEPLAY:
+            return bool(self.free_play) and self.free_play.cursor_visible
+        if self.state == STATE_PLAYING:
+            return self._pointer_t > 0
+        return True
+
     def _draw(self, dt):
         W,H = self._W(),self._H()
-        in_menu = self.state in (STATE_MENU, STATE_SONG_SELECT,
-                                 STATE_RESULTS, STATE_SETTINGS, STATE_PAUSE_MENU)
+        show_cursor = self._cursor_shown() and self._mouse_in
+        # (keycaps light up under the pointer only while it's shown)
+        ui.begin_frame(self._mouse_pos if show_cursor else None)
 
         if self.state == STATE_MENU:
             self.main_menu.screen=self.screen
@@ -676,10 +742,13 @@ class App:
                     autoplay=e.used_autoplay, last_hit_quality=e.last_hit_quality,
                     waiting=waiting, dt=dt)
 
-                if getattr(self, '_countdown_active', False):
+                counting = getattr(self, '_countdown_active', False)
+                if counting:
                     self._draw_countdown(W, H)
                 elif waiting:
                     self._overlay_easy_wait(W, H)
+                if self.state == STATE_PLAYING and self._pointer_t > 0 and not counting:
+                    self._draw_song_keys(W, H)
 
             if self.state == STATE_PAUSE_MENU and self.pause_menu:
                 self.pause_menu.screen = self.screen
@@ -699,15 +768,29 @@ class App:
             self.settings_screen.screen=self.screen
             self.settings_screen.draw()
 
-        # The game's own cursor (the system one stays hidden); none while a song plays
-        show_cursor = in_menu
-        if self.state == STATE_FREEPLAY and self.free_play:
-            # Hidden while playing on computer keys or MIDI, back as soon as the mouse moves
-            show_cursor = self.free_play.cursor_visible
-
+        # The game's own cursor (the system one stays hidden)
         pygame.mouse.set_visible(False)
-        if show_cursor and self._mouse_in:
+        if show_cursor:
             ui.cursor(self.screen, self._mouse_pos, self._cursor_tick, ui.scale_for(W, H))
+
+    SONG_KEYS = [("ESC", "Pause"), ("F5", "Restart"), ("F10", "End song")]
+
+    def _draw_song_keys(self, W, H):
+        """In a song, moving the mouse brings up the pointer and the song's keys as buttons,
+        under the score. They fade out with the pointer."""
+        s = ui.scale_for(W, H)
+        a = min(1.0, self._pointer_t / 0.4)
+        x, y = int(18 * s), self.renderer.hud_left_bottom + int(12 * s)
+        pad = max(4, int(7 * s))
+        hs = ui.hints_surface(self.SONG_KEYS, s)
+        size = (hs.get_width() + 2 * pad, hs.get_height() + 2 * pad)
+        if getattr(self, "_keys_panel", None) is None or self._keys_panel.get_size() != size:
+            self._keys_panel = pygame.Surface(size, pygame.SRCALPHA)
+            ui.panel(self._keys_panel, self._keys_panel.get_rect(), alpha=225,
+                     radius=max(5, int(9 * s)))
+        self._keys_panel.set_alpha(int(255 * a))
+        self.screen.blit(self._keys_panel, (x - pad, y - pad))
+        ui.hints(self.screen, self.SONG_KEYS, (x, y), s, anchor="topleft", alpha=int(255 * a))
 
     def _draw_countdown(self, W, H):
         """3-2-1 before the first note (a draining ring), over a card with the run's details.
@@ -737,10 +820,18 @@ class App:
         a = 1.0 if n > 1 else max(0.0, (frac - 0.5) / 0.5)
         if a > 0:
             card.set_alpha(int(255 * a))
-            self.screen.blit(card, (W // 2 - card.get_width() // 2, top + size + int(14 * s)))
+            cy = top + size + int(14 * s)
+            self.screen.blit(card, (W // 2 - card.get_width() // 2, cy))
+            # The keys are drawn live, so they can be clicked (and light up under the pointer)
+            ui.hints(self.screen, self.COUNTDOWN_KEYS, (W // 2, cy + self._cd_hint_y), s,
+                     anchor="midtop", alpha=int(255 * a))
+
+    COUNTDOWN_KEYS = [("ESC", "Pause"), ("F5", "Restart"), ("F10", "End song"),
+                      ("F11", "Fullscreen")]
 
     def _countdown_card(self, W, H):
-        """The run's details shown under the countdown (cached; changes only with the run)."""
+        """The run's details shown under the countdown (cached; changes only with the run).
+        Its last row is left free for the keys (see _draw_countdown)."""
         song, e = self.current_song, self.engine
         key = (W, H, song.title, getattr(song, "difficulty", ""), e.mode, e.playback_speed)
         if getattr(self, "_cd_key", None) == key:
@@ -748,8 +839,7 @@ class App:
         s = ui.scale_for(W, H)
         pad = int(18 * s)
         cw = min(W - int(40 * s), int(560 * s))
-        hs = ui.hints_surface([("ESC", "Pause"), ("F5", "Restart"), ("F10", "End song"),
-                               ("F11", "Fullscreen")], s)
+        hs = ui.hints_surface(self.COUNTDOWN_KEYS, s)
         head_px, title_px, desc_px = max(9, int(14 * s)), int(22 * s), max(9, int(14 * s))
         pill_h = ui.font(max(9, int(13 * s)), True).get_height() + max(3, int(5 * s))
         ch = (pad + ui.font(head_px, True).get_height() + int(6 * s)
@@ -772,8 +862,7 @@ class App:
         y += pill_h + int(12 * s)
         y = ui.draw_text(card, ui.fit(ui.MODE_DESC.get(e.mode, ""), desc_px, cw - 2 * pad),
                          desc_px, ui.TEXT_MUTED, (cx, y), anchor="midtop").bottom + int(16 * s)
-        card.blit(hs, hs.get_rect(midtop=(cx, y)))
-        self._cd_key, self._cd_card = key, card
+        self._cd_key, self._cd_card, self._cd_hint_y = key, card, y
         return card
 
     def _overlay_easy_wait(self, W, H):

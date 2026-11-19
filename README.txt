@@ -37,11 +37,15 @@ A built-in demo song plays if the folder is empty.
 | ESC | Back / in-game pause menu (change mode there) |
 | M | Change mode in Song Select |
 | [ ] | Practice speed in Song Select |
+| - + | Reverb in Song Select (saved per song, default 25%) |
+| P | Sustain in Song Select (saved per song, default off) |
 | F5 | Restart song |
 | F10 | End song |
 | A S D F G H J... | Play notes (if no MIDI piano; the letters are shown on the piano) |
 
-The bar at the bottom of each menu shows the keys it uses.
+The bar at the bottom of each menu shows the keys it uses. Click them, too: the whole game
+works with just the mouse, and the mouse's back button works as ESC. During a song, move
+the mouse to get Pause / Restart / End song buttons.
 
 **Free Play** (main menu) is a piano to play freely: use your MIDI piano, click the keys,
 or type the letters shown on them. ← → change the octave, SPACE is the sustain pedal.

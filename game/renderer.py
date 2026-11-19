@@ -9,6 +9,8 @@ whole song; text labels and key shading are cached; particles are capped.
 """
 
 import bisect, math, random
+import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
 import pygame
 from game import ui
 from game.fonts import sys_font
@@ -202,6 +204,7 @@ class HighwayRenderer:
         self._labels: Dict[tuple, pygame.Surface] = {}
         self._shadows: Dict[tuple, pygame.Surface] = {}
         self._note_index = (None, [], 0.0)       # (song, start times, longest note)
+        self.hud_left_bottom = 0                  # bottom of the HUD's score column (draw_hud)
 
     def _init_geometry(self):
         self.W = self.screen.get_width()
@@ -413,55 +416,79 @@ class HighwayRenderer:
             if df<=0.0 and db<=0.0: continue
             self._draw_note_block(note.pitch, df, db, self._lane_col(note.pitch, 0))
 
+    SNAP_ROWS = 3   # how far a gradient-strip corner may slide to sit on the true edge
+
     def _note_edges(self, pitch):
-        """x of a note's left/right edge at depth 0 and depth 1 (edges are straight lines)."""
+        """A lane's note edges as straight screen lines x = a + k*y, plus a corner table.
+
+        Notes get anti-aliased sides: a 1px aaline along each edge, with the gradient fill
+        ending exactly under it. pygame fills each polygon row from floor(left line) to
+        floor(right line) between whole-pixel corners, so a corner only lands exactly on the
+        edge on rows where the edge sits just right of a whole pixel. For every row the table
+        holds the best such row within SNAP_ROWS, and the corner x there (left, then right)."""
         e = self._edges.get(pitch)
         if e is None:
             lx_b, rx_b, _ = self._pitch_bounds(pitch)
             mg = 0.5 if is_black(pitch) else 1.5
-            e = self._edges[pitch] = (lx_b + mg, self._project_x(lx_b + mg, 1.0),
-                                      rx_b - mg, self._project_x(rx_b - mg, 1.0))
+            l0, l1 = lx_b + mg, self._project_x(lx_b + mg, 1.0)
+            r0, r1 = rx_b - mg, self._project_x(rx_b - mg, 1.0)
+            y_bot, y_span = self.HWY_BOT, self.HWY_TOP - self.HWY_BOT
+            kl = (l1 - l0) / y_span if y_span else 0.0
+            kr = (r1 - r0) / y_span if y_span else 0.0
+            al, ar = l0 - kl * y_bot, r0 - kr * y_bot
+            m = self.SNAP_ROWS
+            top = min(self.HWY_TOP, y_bot)
+            ys = np.arange(top, max(self.HWY_TOP, y_bot) + 1)
+            table = []
+            for v in (al + kl * ys + 1.5, ar + kr * ys - 0.5):   # fill's first / last pixel
+                x = np.floor(v)
+                pad = np.concatenate([np.full(m, 9.0), v - x, np.full(m, 9.0)])
+                best = np.arange(len(ys)) - m + sliding_window_view(pad, 2 * m + 1).argmin(1)
+                table += [ys[best].tolist(), x[best].astype(int).tolist()]
+            e = self._edges[pitch] = (al, kl, ar, kr, top, *table)
         return e
 
     def _draw_note_block(self, pitch, df, db, color):
-        l0, l1, r0, r1 = self._note_edges(pitch)
+        al, kl, ar, kr, top, LY, LX, RY, RX = self._note_edges(pitch)
         blk = is_black(pitch)
+        scr, floor, poly = self.screen, math.floor, pygame.draw.polygon
         y_bot, y_span = self.HWY_BOT, self.HWY_TOP - self.HWY_BOT
-        def corners(d):
-            y = int(y_bot + y_span * d)
-            return (int(l0 + (l1 - l0) * d), y), (int(r0 + (r1 - r0) * d), y)
-
-        lt,rt = corners(db)
-        lb,rb = corners(df)
+        yt, yb = int(y_bot + y_span * db), int(y_bot + y_span * df)
+        h = yb - yt
         dark = tuple(max(0,int(c*0.5)) for c in color)
-
-        # Gradient strips (bounded: a long held note used to be ~100 polygons)
-        steps = max(2, min(24, (lb[1]-lt[1]) // 8))
-        prev_l, prev_r = lb, rb
-        for s in range(steps):
-            nl, nr = corners(lerp(df, db, (s+1)/steps))
-            pygame.draw.polygon(self.screen, lerpC(color,dark,s/steps), [nl, nr, prev_r, prev_l])
-            prev_l, prev_r = nl, nr
-
         bright = tuple(min(255,int(c*1.7)) for c in color)
-        pygame.draw.line(self.screen, bright, lb, rb, 3)
-        pygame.draw.line(self.screen, bright, lt, lb, 1)
-        pygame.draw.line(self.screen, bright, rt, rb, 1)
+        edge_col = (200,200,220) if not blk else tuple(min(255,int(c*1.4)) for c in color)
 
-        if not blk:
-            edge_col = (200,200,220)
-        else:
-            edge_col = tuple(min(255,int(c*1.4)) for c in color)
-        pygame.draw.line(self.screen, edge_col, lt, lb, 1)
+        # Gradient strips (bounded: a long held note used to be ~100 polygons), filled up to
+        # the edge lines drawn below. Inner corners slide a few rows to fit the edge exactly
+        # (strips are >= 8 rows tall, so they keep their order).
+        xl, xr = floor(al + kl * yb + 1.5), floor(ar + kr * yb - 0.5)
+        bl, br = (xl, yb), (xr, yb)
+        steps = max(2, min(24, h // 8))
+        for s in range(steps):
+            y = yb - (h * (s + 1)) // steps
+            i = y - top
+            if s < steps - 1 and h > 1 and yt < LY[i] < yb and yt < RY[i] < yb:
+                tl, tr = (LX[i], LY[i]), (RX[i], RY[i])
+            else:
+                tl, tr = (floor(al + kl * y + 1.5), y), (floor(ar + kr * y - 0.5), y)
+            poly(scr, lerpC(color, dark, s / steps), [tl, tr, br, bl])
+            bl, br = tl, tr
+
+        # Bright 3px base, then the anti-aliased sides (the left one in the edge colour)
+        if xr >= xl:
+            scr.fill(bright, (xl, yb - 1, xr - xl + 1, 3))
+        pygame.draw.aaline(scr, bright, (ar + kr * yt - 0.5, yt), (ar + kr * (yb + 1) - 0.5, yb + 1))
+        pygame.draw.aaline(scr, edge_col, (al + kl * yt + 0.5, yt), (al + kl * (yb + 1) + 0.5, yb + 1))
 
         lbl = self._labels.get((pitch % 12, blk))
         if lbl is None:
             lbl_color = (15,15,15) if not blk else (200,200,220)
             lbl = self._labels[(pitch % 12, blk)] = self.fn_note.render(pitch_name(pitch), True, lbl_color)
-        dx = (lb[0]+rb[0])//2 - lbl.get_width()//2
-        dy = lb[1] - 2 - lbl.get_height()
+        dx = (xl + xr)//2 - lbl.get_width()//2
+        dy = yb - 2 - lbl.get_height()
         if 0<=dx<self.W and 0<=dy<self.H:
-            self.screen.blit(lbl,(dx,dy))
+            scr.blit(lbl,(dx,dy))
 
     # ── Hit zone ──────────────────────────────────────────────────
     def _draw_hit_zone(self, lpm: List[int], dt: float):
@@ -736,10 +763,12 @@ class HighwayRenderer:
             tags.append((f"SPEED {round(speed * 100)}%", NEON_CYAN, False))
         if autoplay:
             tags.append(("NOT SCORED", NEON_ORANGE, True))
-        x = m
+        x, bottom = m, vy + val_h
         for lab, col, filled in tags:
-            x = ui.pill(surf, lab, col, (x, vy + val_h + int(3 * s)), s, px=pill_px,
-                        filled=filled).right + int(6 * s)
+            r = ui.pill(surf, lab, col, (x, vy + val_h + int(3 * s)), s, px=pill_px,
+                        filled=filled)
+            x, bottom = r.right + int(6 * s), max(bottom, r.bottom)
+        self.hud_left_bottom = bottom     # (the app shows the song's keys under it)
 
         # ── Combo + multiplier (centre). The meter fills up with every hit; ten in a row
         #    raise the multiplier (up to x8, when it stays full).

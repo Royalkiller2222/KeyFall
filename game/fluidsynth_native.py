@@ -63,12 +63,20 @@ _SIGS = {
     "delete_fluid_audio_driver":         (None,  [_P]),
     "fluid_set_log_function":            (_P,    [C.c_int, _P, _P]),
 }
+# Reverb control (FluidSynth 2.2+). Optional: without them CC 91 sets the reverb instead.
+_OPT_SIGS = {
+    "fluid_synth_reverb_on":              (C.c_int, [_P, C.c_int, C.c_int]),
+    "fluid_synth_set_reverb_group_level": (C.c_int, [_P, C.c_int, C.c_double]),
+    "fluid_synth_set_gen":                (C.c_int, [_P, C.c_int, C.c_int, C.c_float]),
+}
+_has_fx = False
+GEN_REVERBSEND = 16          # SoundFont generator: reverb send, in 0.1 % (0..1000)
 _FLUID_WARN, _FLUID_INFO, _FLUID_DBG = 2, 3, 4
 
 
 def _load():
     """Load libfluidsynth once. Returns the library or None."""
-    global _lib, _load_error
+    global _lib, _load_error, _has_fx
     with _load_lock:
         if _lib is not None or _load_error:
             return _lib
@@ -83,6 +91,11 @@ def _load():
             for name, (res, args) in _SIGS.items():
                 fn = getattr(lib, name)
                 fn.restype, fn.argtypes = res, args
+            fx = [getattr(lib, name, None) for name in _OPT_SIGS]
+            if all(fx):
+                for fn, (res, args) in zip(fx, _OPT_SIGS.values()):
+                    fn.restype, fn.argtypes = res, args
+                _has_fx = True
             # quiet: every soundfont without drums warns "no preset on channel 9"; errors still print
             for level in (_FLUID_WARN, _FLUID_INFO, _FLUID_DBG):
                 lib.fluid_set_log_function(level, None, None)
@@ -214,6 +227,24 @@ class Synth:
     def set_gain(self, gain: float):
         if self.synth:
             self._lib.fluid_synth_set_gain(self.synth, float(max(0.0, min(10.0, gain))))
+
+    def set_reverb(self, amount: float):
+        """Reverb from 0 (off) to 1. Every channel sends all of its sound to the reverb (the
+        generator offset adds to the soundfont's own send, which is capped at 100 %), so the
+        amount is simply the reverb's level and sounds the same with any soundfont.
+        At 0.25 the reverb is about 9 dB under the notes."""
+        if not self.synth:
+            return
+        amount = max(0.0, min(1.0, float(amount)))
+        lib = self._lib
+        if _has_fx:
+            lib.fluid_synth_reverb_on(self.synth, -1, 1 if amount > 0 else 0)
+            lib.fluid_synth_set_reverb_group_level(self.synth, -1, amount)
+            for ch in CHANNELS:
+                lib.fluid_synth_set_gen(self.synth, ch, GEN_REVERBSEND, 1000.0)
+        else:
+            for ch in CHANNELS:
+                lib.fluid_synth_cc(self.synth, ch, 91, round(127 * amount))
 
     def active_voices(self) -> int:
         return self._lib.fluid_synth_get_active_voice_count(self.synth) if self.synth else 0

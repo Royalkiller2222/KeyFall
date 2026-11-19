@@ -6,12 +6,13 @@ Persists player XP, level, and song leaderboards
 import copy
 import json
 import os
-from game.constants import SAVE_FILE
+from game.constants import SAVE_FILE, DEFAULT_REVERB
 
 
 DEFAULT_SAVE = {
     "total_xp": 0,
     "leaderboard": {},  # song_title -> [{"score", "accuracy", "grade", "combo"}]
+    "song_options": {},  # song title -> {"reverb": %, "sustain": bool}; only songs changed
 }
 
 
@@ -52,6 +53,32 @@ def save_game(data: dict):
         os.replace(tmp, SAVE_FILE)  # atomic: a crash mid-write can't corrupt the save
     except Exception as e:
         print(f"[Save] Save failed: {e}")
+
+
+def song_options(save_data: dict, title: str) -> dict:
+    """A song's sound options: {"reverb": 0..100 (%), "sustain": bool}."""
+    saved = save_data.get("song_options")
+    opt = saved.get(title) if isinstance(saved, dict) else None
+    if not isinstance(opt, dict):
+        opt = {}
+    try:
+        reverb = int(round(float(opt.get("reverb", DEFAULT_REVERB))))
+    except (TypeError, ValueError):
+        reverb = DEFAULT_REVERB
+    return {"reverb": max(0, min(100, reverb)), "sustain": opt.get("sustain") is True}
+
+
+def set_song_options(save_data: dict, title: str, reverb: int, sustain: bool):
+    """Store a song's sound options (the caller saves). A song back at the defaults is
+    dropped from the save."""
+    saved = save_data.get("song_options")
+    if not isinstance(saved, dict):
+        saved = save_data["song_options"] = {}
+    reverb = max(0, min(100, int(round(reverb))))
+    if reverb == DEFAULT_REVERB and not sustain:
+        saved.pop(title, None)
+    else:
+        saved[title] = {"reverb": reverb, "sustain": bool(sustain)}
 
 
 def leaderboard_key(song, mode: str, speed: float) -> str:

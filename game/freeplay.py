@@ -53,8 +53,9 @@ _KB = (
     ("0", pygame.K_0, 87), ("P", pygame.K_p, 88),
 )
 
-HINTS = [("CLICK", "Play"), (("Z", "X", "C"), "Letters on the piano"), (("←", "→"), "Octave"),
-         ("SPACE", "Sustain pedal"), ("ESC", "Back")]
+# (the first two only explain: they're not buttons. A click on SPACE turns the pedal on/off)
+HINTS = [("CLICK", "Play", None), (("Z", "X", "C"), "Letters on the piano", None),
+         (("←", "→"), "Octave"), ("SPACE", "Sustain pedal"), ("ESC", "Back")]
 
 
 def is_black(p):
@@ -242,7 +243,10 @@ class FreePlay:
                 self._octave_shift = max(-3, min(3, self._octave_shift + step))
                 return None
             if k == pygame.K_SPACE:                        # sustain pedal
-                if not self._space_sustain:
+                if getattr(event, "clicked", False):       # the SPACE hint: on / off
+                    self._space_sustain = not self._space_sustain
+                    self.set_sustain(self._space_sustain)
+                elif not self._space_sustain:
                     self._space_sustain = True
                     self.set_sustain(True)
                 return None

@@ -393,15 +393,69 @@ def segment(surf, rect, label, color, s, selected=False, hovered=False, enabled=
 
 
 # ── Keycap hints ──────────────────────────────────────────────────
-_hint_cache = {}
+# The hints are buttons too: every keycap drawn this frame is remembered with its key, and the
+# app turns a click on one into that key press (key_event), so each screen can be used with
+# the mouse alone. A hint item is (caps, label) or (caps, label, keys): keys gives the key of
+# each cap, or None for a cap that only explains something (e.g. "CLICK", the letter keys).
+CAP_KEYS = {
+    "ESC": pygame.K_ESCAPE, "ENTER": pygame.K_RETURN, "SPACE": pygame.K_SPACE,
+    "TAB": pygame.K_TAB, "↑": pygame.K_UP, "↓": pygame.K_DOWN, "←": pygame.K_LEFT,
+    "→": pygame.K_RIGHT, "[": pygame.K_LEFTBRACKET, "]": pygame.K_RIGHTBRACKET,
+    "-": pygame.K_MINUS, "+": pygame.K_PLUS, "PGUP": pygame.K_PAGEUP,
+    "PGDN": pygame.K_PAGEDOWN, "HOME": pygame.K_HOME, "END": pygame.K_END,
+}
+CAP_KEYS.update({f"F{i}": getattr(pygame, f"K_F{i}") for i in range(1, 13)})
+CAP_KEYS.update({c: getattr(pygame, f"K_{c.lower()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"})
 
-def hints_surface(items, s, label_color=TEXT_MUTED):
-    """A row of keycap hints, e.g. [(("↑", "↓"), "Navigate"), ("ENTER", "Select")]."""
-    norm = tuple(((k,) if isinstance(k, str) else tuple(k), lab) for k, lab in items)
-    key = (norm, round(s, 3), label_color)
-    surf = _hint_cache.get(key)
-    if surf is not None:
-        return surf
+_hint_cache = {}
+_hint_hits = []          # (rect, key) of the clickable keycaps drawn this frame
+_hint_mouse = None       # pointer position for the hover highlight (set by begin_frame)
+
+
+def begin_frame(mouse_pos=None):
+    """The app calls this before drawing a frame: forget the last frame's keycaps."""
+    global _hint_mouse
+    _hint_hits.clear()
+    _hint_mouse = mouse_pos
+
+
+def hint_key_at(pos):
+    """Key of the keycap hint at pos in the last frame drawn, or None."""
+    for r, key in reversed(_hint_hits):
+        if r.collidepoint(pos):
+            return key
+    return None
+
+
+def key_event(key):
+    """The KEYDOWN a click on a keycap hint stands for (event.clicked is True)."""
+    return pygame.event.Event(pygame.KEYDOWN, key=key, mod=0, unicode="", scancode=0,
+                              clicked=True)
+
+
+def _norm_hints(items):
+    out = []
+    for item in items:
+        caps, lab = item[0], item[1]
+        caps = (caps,) if isinstance(caps, str) else tuple(caps)
+        if len(item) > 2:
+            keys = item[2]
+            keys = (tuple(keys) if isinstance(keys, (tuple, list))
+                    else (keys,) * len(caps))
+        else:
+            keys = tuple(CAP_KEYS.get(c) for c in caps)
+        out.append((caps, lab, keys))
+    return tuple(out)
+
+
+def _hint_layout(items, s, label_color=TEXT_MUTED):
+    """(surface, zones) for a row of keycap hints. zones = [(rect, key, cap rects)]: an item
+    with one key is clickable as a whole, an item with several (↑ ↓) per keycap."""
+    norm = _norm_hints(items)
+    ck = (norm, round(s, 3), label_color)
+    hit = _hint_cache.get(ck)
+    if hit is not None:
+        return hit
     fcap, flab = font(max(9, int(12 * s)), True), font(max(9, int(13 * s)))
     cap_h = max(16, int(22 * s))
     pad = max(4, int(6 * s))
@@ -410,14 +464,16 @@ def hints_surface(items, s, label_color=TEXT_MUTED):
 
     def cap_w(c): return max(cap_h, fcap.size(c)[0] + pad * 2)
     width = 0
-    for n, (caps, lab) in enumerate(norm):
+    for n, (caps, lab, _) in enumerate(norm):
         width += (gi if n else 0) + sum(cap_w(c) for c in caps) + gk * (len(caps) - 1)
         if lab:
             width += gl + flab.size(lab)[0]
     surf = pygame.Surface((max(1, width), cap_h), pygame.SRCALPHA)
+    zones = []
     x = 0
-    for n, (caps, lab) in enumerate(norm):
+    for n, (caps, lab, keys) in enumerate(norm):
         x += gi if n else 0
+        x0, rects = x, []
         for j, c in enumerate(caps):
             x += gk if j else 0
             r = pygame.Rect(x, 0, cap_w(c), cap_h)
@@ -425,22 +481,56 @@ def hints_surface(items, s, label_color=TEXT_MUTED):
             pygame.draw.rect(surf, (88, 88, 126, 255), r, 1, border_radius=rad)
             ct = fcap.render(c, True, TEXT)
             surf.blit(ct, ct.get_rect(center=r.center))
+            rects.append(r)
             x += r.w
         if lab:
             x += gl
             lt = flab.render(lab, True, label_color)
             surf.blit(lt, (x, (cap_h - lt.get_height()) // 2))
             x += lt.get_width()
+        live = [(r, k) for r, k in zip(rects, keys) if k is not None]
+        if len(set(k for _, k in live)) == 1 and len(live) == len(rects):
+            zones.append((pygame.Rect(x0, 0, x - x0, cap_h), live[0][1], rects))
+        else:
+            zones.extend((r, k, [r]) for r, k in live)
     if len(_hint_cache) > 64:
         _hint_cache.clear()
-    _hint_cache[key] = surf
-    return surf
+    _hint_cache[ck] = (surf, zones)
+    return surf, zones
 
 
-def hints(surf, items, pos, s, anchor="midbottom", label_color=TEXT_MUTED):
-    h = hints_surface(items, s, label_color)
+def hints_surface(items, s, label_color=TEXT_MUTED):
+    """A row of keycap hints, e.g. [(("↑", "↓"), "Navigate"), ("ENTER", "Select")]."""
+    return _hint_layout(items, s, label_color)[0]
+
+
+def hints(surf, items, pos, s, anchor="midbottom", label_color=TEXT_MUTED, interactive=True,
+          alpha=255):
+    """Draw a row of keycap hints. interactive: clicking a keycap presses its key, and the
+    one under the pointer lights up (False for rows that only list keys)."""
+    h, zones = _hint_layout(items, s, label_color)
     r = h.get_rect(**{anchor: (int(pos[0]), int(pos[1]))})
-    surf.blit(h, r)
+    hover = None
+    if interactive and alpha >= 160:
+        mx, my = max(2, int(5 * s)), max(3, int(6 * s))
+        for zr, key, caps in zones:
+            area = zr.move(r.topleft).inflate(mx * 2, my * 2)
+            _hint_hits.append((area, key))
+            if _hint_mouse is not None and area.collidepoint(_hint_mouse):
+                hover = (area, caps)
+    if hover:   # lit like a hovered button: a tinted plate behind, neon keycap borders
+        panel(surf, hover[0], fill=shade(NEON_CYAN, 0.14), alpha=235,
+              border=mix(NEON_CYAN, EDGE, 0.35), radius=max(4, int(7 * s)), top_hi=False)
+    if alpha < 255:
+        h.set_alpha(alpha)
+        surf.blit(h, r)
+        h.set_alpha(255)
+    else:
+        surf.blit(h, r)
+    if hover:
+        for cr in hover[1]:
+            pygame.draw.rect(surf, NEON_CYAN, cr.move(r.topleft), 1,
+                             border_radius=max(3, int(5 * s)))
     return r
 
 

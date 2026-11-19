@@ -15,8 +15,9 @@ from typing import List, Optional
 import pygame
 
 from game import ui
-from game.constants import (LANE_COLORS, MODE_TESTING, NEON_CYAN, NEON_GREEN, NEON_ORANGE,
-                            NEON_PINK, NEON_PURPLE, NEON_RED, NEON_YELLOW, SONGS_DIR)
+from game.constants import (DEFAULT_REVERB, LANE_COLORS, MODE_TESTING, NEON_CYAN, NEON_GREEN,
+                            NEON_ORANGE, NEON_PINK, NEON_PURPLE, NEON_RED, NEON_YELLOW,
+                            SONGS_DIR)
 from game.song_library import DIFFICULTY_COLORS, DIFFICULTY_ORDER, SongEntry
 
 COVER_NAMES = ("cover.png", "cover.jpg", "cover.jpeg", "art.png", "art.jpg")
@@ -208,7 +209,8 @@ class SongSelectMenu(MenuBase):
     PREVIEW_DELAY = 0.5
 
     def __init__(self, screen, entries: List[SongEntry], current_mode: str,
-                 midi_connected: bool, audio=None, pb_lookup=None):
+                 midi_connected: bool, audio=None, pb_lookup=None, fx_lookup=None,
+                 fx_store=None):
         super().__init__(screen)
         self.entries = entries
         self.selected = 0
@@ -216,6 +218,12 @@ class SongSelectMenu(MenuBase):
         self.midi_connected = midi_connected
         self.audio = audio
         self.pb_lookup = pb_lookup        # (song, mode, speed) -> best leaderboard entry or None
+        self.fx_lookup = fx_lookup        # song key -> {"reverb": %, "sustain": bool}
+        self.fx_store = fx_store          # (song key, reverb %, sustain): keeps a song's sound
+        self._fx_drag = False             # dragging the REVERB knob
+        self._reverb_box = None           # REVERB slider and its track, from the last draw
+        self._reverb_track = None
+        self._fit = (None, None)          # (key, sizes) of the details column
         self.VISIBLE = 7                  # cards that fit; recomputed from the window size
         self.scroll_offset = 0
         self._diff_sel = {}               # entry index -> chosen difficulty
@@ -303,6 +311,53 @@ class SongSelectMenu(MenuBase):
             self._speed_idx = i
             _sfx(self.audio, "click")
 
+    # ── the song's sound: reverb and sustain, saved per song ──────
+    def _fx_key(self):
+        """Every difficulty of a song shares its options. They are kept under the title its
+        charts carry (the folder name), like the leaderboard."""
+        e = self.entries[self.selected]
+        song = next(iter(e.difficulties.values()), None)
+        return song.title if song else e.title
+
+    def _fx(self):
+        if self.entries and self.fx_lookup:
+            return self.fx_lookup(self._fx_key())
+        return {"reverb": DEFAULT_REVERB, "sustain": False}
+
+    def _set_fx(self, reverb=None, sustain=None, sound=True):
+        if not self.entries:
+            return
+        cur = self._fx()
+        r = cur["reverb"] if reverb is None else max(0, min(100, int(round(reverb))))
+        su = cur["sustain"] if sustain is None else bool(sustain)
+        if (r, su) == (cur["reverb"], cur["sustain"]):
+            return
+        if self.fx_store:
+            self.fx_store(self._fx_key(), r, su)
+        if self.audio:
+            self.audio.set_song_fx(r / 100, su)   # the preview plays with it right away
+        if sound:
+            _sfx(self.audio, "click")
+
+    def _step_reverb(self, d):
+        """Keys and wheel: to the next 5 % mark that way."""
+        r = self._fx()["reverb"]
+        self._set_fx(reverb=(r // 5 + 1) * 5 if d > 0 else (r - 1) // 5 * 5)
+
+    def _drag_reverb(self, pos):
+        tr = self._reverb_track
+        if tr and tr.w > 0:
+            self._set_fx(reverb=(pos[0] - tr.x) / tr.w * 100, sound=False)
+
+    def _reverb_note(self):
+        """Why the reverb isn't heard with the instrument in use (None when it is)."""
+        a = self.audio
+        if a is None or a.has_reverb:
+            return None
+        if a.note_sound_mode == "midi_out":
+            return "no output device"
+        return "needs FluidSynth" if a.note_sound_mode == "soundfont" else "needs SOUNDFONT"
+
     def _play(self):
         if not self.entries:
             return None
@@ -366,19 +421,37 @@ class SongSelectMenu(MenuBase):
                 self._step_diff(1)
             elif k == pygame.K_m:
                 self._step_mode(1)
-            elif k in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
+            elif k == pygame.K_LEFTBRACKET:
                 self._step_speed(-1)
-            elif k in (pygame.K_RIGHTBRACKET, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+            elif k == pygame.K_RIGHTBRACKET:
                 self._step_speed(1)
+            elif k in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                self._step_reverb(-1)
+            elif k in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+                self._step_reverb(1)
+            elif k == pygame.K_p:
+                self._set_fx(sustain=not self._fx()["sustain"])
             elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 return self._play()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for rect, action, arg in reversed(self._hits):
                 if rect.collidepoint(event.pos):
+                    if action == "reverb":
+                        self._fx_drag = True
+                        self._drag_reverb(event.pos)
+                        return None
                     return self._click(action, arg)
+        elif event.type == pygame.MOUSEMOTION and self._fx_drag:
+            self._drag_reverb(event.pos)
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self._fx_drag:
+            self._fx_drag = False
+            _sfx(self.audio, "click")
         elif event.type == pygame.MOUSEWHEEL and n:
-            self.scroll_offset = max(0, min(max(0, n - self.VISIBLE),
-                                            self.scroll_offset - event.y))
+            if self._reverb_box and self.hovering(self._reverb_box):
+                self._step_reverb(1 if event.y > 0 else -1)
+            else:
+                self.scroll_offset = max(0, min(max(0, n - self.VISIBLE),
+                                                self.scroll_offset - event.y))
         return None
 
     def _click(self, action, arg):
@@ -398,6 +471,8 @@ class SongSelectMenu(MenuBase):
             if arg != self._speed_idx:
                 self._speed_idx = arg
                 _sfx(self.audio, "click")
+        elif action == "sustain":
+            self._set_fx(sustain=arg)
         elif action == "play":
             return self._play()
         elif action == "folder":
@@ -422,6 +497,11 @@ class SongSelectMenu(MenuBase):
             self._prev_t = 0.0
             if self.audio:
                 self.audio.all_notes_off(150)   # stop the previous song's preview
+        if self._fx_drag and not pygame.mouse.get_pressed()[0]:
+            self._fx_drag = False               # (button released outside the window)
+        if self.audio and self.entries:         # the preview plays with the song's sound
+            fx = self._fx()
+            self.audio.set_song_fx(fx["reverb"] / 100, fx["sustain"])
         if (self.audio and self._prev_timer >= self.PREVIEW_DELAY
                 and self.entries and 0 <= self.selected < len(self.entries)):
             song = self.entries[self.selected].get_song(cur_diff)
@@ -468,8 +548,8 @@ class SongSelectMenu(MenuBase):
         else:
             self._draw_empty(lst.union(det))
         ui.footer(self.screen, s, [(("↑", "↓"), "Song"), (("←", "→"), "Difficulty"),
-                                   ("M", "Mode"), (("[", "]"), "Speed"), ("ENTER", "Play"),
-                                   ("ESC", "Back")])
+                                   ("M", "Mode"), (("[", "]"), "Speed"), (("-", "+"), "Reverb"),
+                                   ("P", "Sustain"), ("ENTER", "Play"), ("ESC", "Back")])
         if self._notif_timer > 0:
             self._draw_toast(head_h)
 
@@ -675,17 +755,63 @@ class SongSelectMenu(MenuBase):
             x = inner.x + int(min(1.0, self._prev_t / max(0.1, song.duration_sec)) * inner.w)
             pygame.draw.line(surf, ui.TEXT, (x, r.y + 3), (x, r.bottom - 4), 2)
 
+    def _fit_details(self, det, entry, song):
+        """Sizes for the details column: the natural ones when there is room, otherwise the
+        cover, roll, gaps and PLAY button shrink just enough to fit (and in a very short
+        window the roll goes)."""
+        s = self.s
+        key = (det.size, s, entry.title, entry.author, id(song))
+        if self._fit[0] == key:
+            return self._fit[1]
+        pad = int(18 * s)
+        sec_h = ui.font(max(9, int(13 * s)), True).get_height()
+        seg_h, head_gap = max(20, int(32 * s)), int(8 * s)
+        desc_h = ui.font(int(13 * s)).get_height()
+        pb_h = ui.font(max(9, int(13 * s)), True).get_height() + max(3, int(5 * s))
+
+        def text_h(cover):
+            tw = det.w - 2 * pad - cover - int(16 * s)
+            h = (len(ui.wrap(entry.title, int(22 * s), tw, True, 2))
+                 * ui.font(int(22 * s), True).get_height() + int(8 * s))
+            if entry.author:
+                h += int(2 * s) + ui.font(int(15 * s)).get_height()
+            if song:
+                h += 2 * ui.font(int(13 * s)).get_height() + int(4 * s)
+            return h
+
+        def lerp(a, b, f):
+            return int(round((a + (b - a) * f) * s))
+
+        for roll in (True, False):
+            for i in range(11):
+                f = i / 10
+                z = {"cover": lerp(120, 84, f), "cover_gap": lerp(14, 10, f),
+                     "roll": lerp(46, 30, f) if roll else 0, "gap": lerp(16, 11, f),
+                     "desc_gap": lerp(14, 10, f), "play": max(30, lerp(50, 42, f))}
+                z["head"] = max(z["cover"], text_h(z["cover"]))
+                total = (2 * pad + z["head"] + z["cover_gap"]
+                         + (z["roll"] + z["gap"] if roll else 0)
+                         + 3 * (sec_h + head_gap + seg_h + z["gap"])    # difficulty, speed, sound
+                         + sec_h + head_gap + seg_h + int(6 * s) + desc_h + z["desc_gap"]  # mode
+                         + sec_h + head_gap + pb_h + int(10 * s) + z["play"])
+                if total <= det.h:
+                    self._fit = (key, z)
+                    return z
+        self._fit = (key, z)
+        return z
+
     def _draw_details(self, det):
         surf, s, t = self.screen, self.s, self._tick
         ui.panel(surf, det, alpha=200)
         entry = self.entries[self.selected]
         diff = self._entry_diff(self.selected)
         song = entry.get_song(diff)
+        z = self._fit_details(det, entry, song)
         pad = int(18 * s)
         x, y, w = det.x + pad, det.y + pad, det.w - 2 * pad
 
         # cover, title, facts
-        cover = pygame.Rect(x, y, int(120 * s), int(120 * s))
+        cover = pygame.Rect(x, y, z["cover"], z["cover"])
         self._draw_thumb(entry, cover)
         tx = cover.right + int(16 * s)
         tw = det.right - pad - tx
@@ -704,10 +830,11 @@ class SongSelectMenu(MenuBase):
             ui.draw_text(surf, f"Keys {ui.note_name(song.min_pitch)} – {ui.note_name(song.max_pitch)}",
                          int(13 * s), ui.TEXT_DIM, (tx, ty))
 
-        y = cover.bottom + int(14 * s)
-        roll = pygame.Rect(x, y, w, int(46 * s))
-        self._draw_roll(song, roll)
-        y = roll.bottom + int(16 * s)
+        y += z["head"] + z["cover_gap"]
+        if z["roll"]:
+            roll = pygame.Rect(x, y, w, z["roll"])
+            self._draw_roll(song, roll)
+            y = roll.bottom + z["gap"]
 
         seg_h = max(20, int(32 * s))
         seg_px = max(9, int(13 * s))
@@ -722,7 +849,7 @@ class SongSelectMenu(MenuBase):
                        hovered=ok and self.hovering(cell), enabled=ok, px=seg_px)
             if ok:
                 self._hits.append((cell, "diff", d))
-        y += seg_h + int(16 * s)
+        y += seg_h + z["gap"]
 
         y += ui.section(surf, "MODE", x, y, w, s, right="M") + head_gap
         cells = ui.split_row((x, y, w, seg_h), len(ui.MODES), cell_gap)
@@ -732,7 +859,7 @@ class SongSelectMenu(MenuBase):
             self._hits.append((cell, "mode", md))
         y += seg_h + int(6 * s)
         y = ui.draw_text(surf, ui.fit(ui.MODE_DESC.get(self.mode, ""), int(13 * s), w),
-                         int(13 * s), ui.TEXT_MUTED, (x, y)).bottom + int(14 * s)
+                         int(13 * s), ui.TEXT_MUTED, (x, y)).bottom + z["desc_gap"]
 
         y += ui.section(surf, "SPEED", x, y, w, s, right="[ ]") + head_gap
         cells = ui.split_row((x, y, w, seg_h), len(self._speeds), cell_gap)
@@ -740,16 +867,65 @@ class SongSelectMenu(MenuBase):
             ui.segment(surf, cell, f"{int(sp * 100)}%", NEON_CYAN, s,
                        selected=(i == self._speed_idx), hovered=self.hovering(cell), px=seg_px)
             self._hits.append((cell, "speed", i))
-        y += seg_h + int(16 * s)
+        y += seg_h + z["gap"]
+
+        # The song's sound (saved per song): REVERB slider, SUSTAIN pedal held for the song
+        fx = self._fx()
+        col_gap = int(16 * s)
+        rw = int((w - col_gap) * 0.6)
+        sx, sw = x + rw + col_gap, w - rw - col_gap
+        note = self._reverb_note()
+        sec_h = ui.section(surf, "REVERB", x, y, rw, s, right=note or "- +")
+        ui.section(surf, "SUSTAIN", sx, y, sw, s, right="P")
+        y += sec_h + head_gap
+        box = pygame.Rect(x, y, rw, seg_h)
+        self._draw_reverb(box, fx["reverb"], note is None)
+        self._hits.append((box, "reverb", None))
+        cells = ui.split_row((sx, y, sw, seg_h), 2, cell_gap)
+        for cell, on in zip(cells, (False, True)):
+            ui.segment(surf, cell, "ON" if on else "OFF", NEON_YELLOW if on else ui.TEXT_MUTED, s,
+                       selected=(fx["sustain"] == on), hovered=self.hovering(cell), px=seg_px)
+            self._hits.append((cell, "sustain", on))
+        y += seg_h + z["gap"]
 
         y += ui.section(surf, "PERSONAL BEST", x, y, w, s) + head_gap
         self._draw_pb(song, x, y, w)
 
-        bh = max(30, int(50 * s))
+        bh = z["play"]
         play = pygame.Rect(x, det.bottom - pad - bh, w, bh)
         ui.button(surf, play, "PLAY", s, NEON_GREEN, selected=True, hovered=self.hovering(play),
                   t=t, px=int(22 * s), icon=ui.icon_play)
         self._hits.append((play, "play", None))
+
+    def _draw_reverb(self, box, value, live):
+        """REVERB: a slider with its value at the right end. When the instrument in use has no
+        reverb it is drawn dimmed, but it can still be set (it is saved with the song)."""
+        surf, s = self.screen, self.s
+        col = NEON_PURPLE if live else ui.TEXT_DIM
+        hot = self._fx_drag or self.hovering(box)
+        rad = max(4, int(7 * s))
+        if hot:
+            ui.panel(surf, box, fill=ui.shade(col, 0.1), alpha=230,
+                     border=ui.mix(col, ui.EDGE, 0.4), radius=rad)
+        else:
+            ui.panel(surf, box, alpha=200, border=ui.EDGE, radius=rad)
+        px = max(9, int(13 * s))
+        inset = int(12 * s)
+        ui.draw_text(surf, f"{value}%", px, ui.TEXT if live else ui.TEXT_DIM,
+                     (box.right - inset, box.centery), bold=True, anchor="midright")
+        kr = max(5, int(9 * s))
+        th = max(4, int(6 * s))
+        x0 = box.x + inset + kr
+        x1 = box.right - inset - ui.text_w("100%", px, True) - inset - kr
+        track = pygame.Rect(x0, box.centery - th // 2, max(1, x1 - x0), th)
+        self._reverb_box, self._reverb_track = box, track
+        ui.bar(surf, track, value / 100, ui.shade(col, 0.75))
+        kx, ky = track.x + int(track.w * value / 100), track.centery
+        if hot and live:
+            ui.glow(surf, (kx - kr, ky - kr, 2 * kr, 2 * kr), col, radius=kr,
+                    spread=max(4, int(7 * s)), strength=0.9 if self._fx_drag else 0.55)
+        pygame.draw.circle(surf, col, (kx, ky), kr)
+        pygame.draw.circle(surf, (10, 10, 22), (kx, ky), max(2, int(kr * 0.42)))
 
     def _draw_pb(self, song, x, y, w):
         surf, s = self.screen, self.s
@@ -843,7 +1019,9 @@ class ResultsScreen(MenuBase):
 
     def handle_event(self, event) -> Optional[str]:
         self.track_mouse(event)
-        if event.type == pygame.KEYDOWN and self._show_timer >= self.KEY_DELAY:
+        # (a click on a footer keycap is meant, so it skips the delay)
+        if event.type == pygame.KEYDOWN and (self._show_timer >= self.KEY_DELAY
+                                             or getattr(event, "clicked", False)):
             k = event.key
             if k in (pygame.K_LEFT, pygame.K_a):
                 self.selected = (self.selected - 1) % len(self.BUTTONS)

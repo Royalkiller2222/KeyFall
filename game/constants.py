@@ -84,6 +84,9 @@ MODE_EASY = "EASY"   # wait for correct note
 MODE_HARD = "HARD"   # punish wrong notes, keep going
 MODE_TESTING = "TESTING"  # notes play automatically
 
+# A song's sound (Song Select, saved per song)
+DEFAULT_REVERB = 25       # reverb, in %
+
 # States
 STATE_MENU = "menu"
 STATE_SONG_SELECT = "song_select"
